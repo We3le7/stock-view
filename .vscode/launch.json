@@ -1,0 +1,42 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: FastAPI (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "DATABASE_URL": "postgresql+asyncpg://stockview:stockview123@localhost:5432/stockview",
+        "REDIS_URL": "redis://localhost:6379/0",
+        "AI_ADAPTER": "mock",
+        "APP_ENV": "development",
+        "APP_DEBUG": "true"
+      },
+      "python": "${workspaceFolder}/backend/venv/bin/python",
+      "justMyCode": true,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Frontend: Vite Dev Server",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/frontend",
+      "args": []
+    }
+  ],
+  "compounds": [
+    {
+      "name": "🚀 Full Stack (Backend + Frontend)",
+      "configurations": ["Backend: FastAPI (uvicorn)", "Frontend: Vite Dev Server"],
+      "presentation": {
+        "group": "stock-view",
+        "order": 1
+      }
+    }
+  ]
+}
