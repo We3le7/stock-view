@@ -1,0 +1,19 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: main
+exported_at: "2026-06-05T08:28:32Z"
+modules:
+    "":
+        dir_name: A股实时行情与AI分析平台
+        title: A股实时行情与AI分析平台
+        scope:
+            - README.md
+            - Stock-View 软件开发文档/
+            - frontend/
+            - backend/
+            - .env.example
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

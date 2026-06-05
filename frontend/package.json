@@ -1,0 +1,26 @@
+{
+  "name": "stock-view-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.4",
+    "vue-router": "^4.3",
+    "pinia": "^2.1",
+    "element-plus": "^2.6",
+    "echarts": "^5.5",
+    "axios": "^1.6",
+    "@vueuse/core": "^10.9"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0",
+    "typescript": "^5.4",
+    "vite": "^5.2",
+    "vue-tsc": "^2.0"
+  }
+}
