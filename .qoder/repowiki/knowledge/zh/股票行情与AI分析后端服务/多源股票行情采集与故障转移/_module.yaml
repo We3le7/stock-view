@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: backend/data_collectors
+title: 多源股票行情采集与故障转移
+scope:
+    - backend/app/services/collector/
+source_files: []
+depends_on: []
+related_to:
+    - path: backend/api_v1

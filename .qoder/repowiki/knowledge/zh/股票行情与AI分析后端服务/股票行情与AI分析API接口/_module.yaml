@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: backend/api_v1
+title: 股票行情与AI分析API接口
+scope:
+    - backend/app/api/
+source_files: []
+depends_on: []
+related_to:
+    - path: frontend
+    - path: backend/data_collectors

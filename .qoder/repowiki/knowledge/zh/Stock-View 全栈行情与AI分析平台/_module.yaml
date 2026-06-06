@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: ""
+title: Stock-View 全栈行情与AI分析平台
+scope:
+    - README.md
+    - docker-compose.yml
+    - Stock-View 软件开发文档/
+    - .env.example
+source_files: []
+depends_on: []
+related_to: []

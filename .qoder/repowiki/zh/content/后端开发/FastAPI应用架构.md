@@ -1,17 +1,22 @@
 # FastAPI应用架构
 
 <cite>
-**本文档引用的文件**
+**本文引用的文件**
 - [backend/app/main.py](file://backend/app/main.py)
 - [backend/app/core/config.py](file://backend/app/core/config.py)
 - [backend/app/core/database.py](file://backend/app/core/database.py)
 - [backend/app/core/redis.py](file://backend/app/core/redis.py)
 - [backend/app/core/security.py](file://backend/app/core/security.py)
-- [backend/app/api/v1/ai.py](file://backend/app/api/v1/ai.py)
 - [backend/app/api/v1/quote.py](file://backend/app/api/v1/quote.py)
 - [backend/app/api/v1/stock.py](file://backend/app/api/v1/stock.py)
 - [backend/app/api/v1/watchlist.py](file://backend/app/api/v1/watchlist.py)
+- [backend/app/api/v1/ai.py](file://backend/app/api/v1/ai.py)
 - [backend/app/api/websocket.py](file://backend/app/api/websocket.py)
+- [backend/app/models/models.py](file://backend/app/models/models.py)
+- [backend/app/schemas/schemas.py](file://backend/app/schemas/schemas.py)
+- [backend/app/services/collector/manager.py](file://backend/app/services/collector/manager.py)
+- [backend/app/services/collector/base.py](file://backend/app/services/collector/base.py)
+- [backend/app/services/collector/eastmoney.py](file://backend/app/services/collector/eastmoney.py)
 </cite>
 
 ## 目录
@@ -24,299 +29,539 @@
 7. [性能考虑](#性能考虑)
 8. [故障排查指南](#故障排查指南)
 9. [结论](#结论)
+10. [附录](#附录)
 
 ## 简介
-本文件系统性梳理Stock-View项目的FastAPI应用架构，重点围绕应用初始化流程中的生命周期管理(lifespan)、CORS跨域配置、路由注册机制展开；同时深入解析数据库连接初始化、Redis缓存连接管理、中间件配置等关键环节。文档还总结了异步上下文管理器的使用模式、资源的正确初始化与清理策略，并给出应用配置管理的最佳实践，包括环境变量加载、配置验证与运行时更新的技术要点。为便于理解，文中提供了多幅架构图与流程图，并以“章节来源”标注具体实现位置。
+本文件系统性梳理后端FastAPI应用的架构设计与实现要点，覆盖应用生命周期管理、CORS跨域配置、路由注册机制；配置管理系统（Config）、数据库连接初始化（Database）、Redis缓存管理（Redis）的实现原理与使用方法；依赖注入机制、中间件配置、异常处理策略；应用启动流程、资源管理与优雅关闭；并提供配置项说明与最佳实践建议。
 
 ## 项目结构
-后端采用按功能域划分的模块化组织方式：核心能力位于core目录（配置、数据库、Redis、安全），业务API位于api/v1目录（AI分析、行情、股票、自选股），WebSocket位于独立模块，服务层位于services目录（采集器与管理器）。主入口在main.py中完成应用实例创建、生命周期钩子、CORS与路由注册。
+后端采用按功能模块划分的目录组织方式，核心入口位于应用根目录，核心能力集中在core、api、models、schemas、services等子包中，前端独立于后端目录。
 
 ```mermaid
 graph TB
-subgraph "应用入口"
-M["main.py<br/>应用初始化"]
-end
-subgraph "核心模块"
-C["config.py<br/>配置管理"]
-D["database.py<br/>数据库引擎/会话/初始化"]
-R["redis.py<br/>Redis连接池/关闭"]
-S["security.py<br/>密码/令牌工具"]
-end
-subgraph "API路由"
-V1["api/v1/*<br/>AI/行情/股票/自选股"]
-WS["api/websocket.py<br/>WebSocket"]
-end
-M --> C
-M --> D
-M --> R
-M --> V1
-M --> WS
-V1 --> D
-V1 --> R
-WS --> R
+A["应用入口<br/>backend/app/main.py"] --> B["核心配置<br/>backend/app/core/config.py"]
+A --> C["数据库引擎与会话<br/>backend/app/core/database.py"]
+A --> D["Redis连接池<br/>backend/app/core/redis.py"]
+A --> E["API路由v1<br/>backend/app/api/v1/*.py"]
+A --> F["WebSocket路由<br/>backend/app/api/websocket.py"]
+E --> G["数据采集器管理<br/>backend/app/services/collector/manager.py"]
+G --> H["采集器基类<br/>backend/app/services/collector/base.py"]
+G --> I["东方财富采集器<br/>backend/app/services/collector/eastmoney.py"]
+E --> J["数据模型定义<br/>backend/app/models/models.py"]
+E --> K["数据序列化模型<br/>backend/app/schemas/schemas.py"]
 ```
 
-**图表来源**
+图表来源
 - [backend/app/main.py:1-48](file://backend/app/main.py#L1-L48)
 - [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
 - [backend/app/core/database.py:1-25](file://backend/app/core/database.py#L1-L25)
 - [backend/app/core/redis.py:1-25](file://backend/app/core/redis.py#L1-L25)
-- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
 - [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
 - [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
 - [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
+- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
 - [backend/app/api/websocket.py:1-79](file://backend/app/api/websocket.py#L1-L79)
+- [backend/app/services/collector/manager.py:1-94](file://backend/app/services/collector/manager.py#L1-L94)
+- [backend/app/services/collector/base.py:1-45](file://backend/app/services/collector/base.py#L1-L45)
+- [backend/app/services/collector/eastmoney.py:1-297](file://backend/app/services/collector/eastmoney.py#L1-L297)
+- [backend/app/models/models.py:1-74](file://backend/app/models/models.py#L1-L74)
+- [backend/app/schemas/schemas.py:1-103](file://backend/app/schemas/schemas.py#L1-L103)
 
-**章节来源**
+章节来源
 - [backend/app/main.py:1-48](file://backend/app/main.py#L1-L48)
-- [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
 
 ## 核心组件
-- 应用实例与生命周期
-  - 使用asynccontextmanager定义lifespan，启动阶段调用数据库初始化，关闭阶段释放Redis连接。
-  - 通过FastAPI构造函数注入lifespan，确保资源在应用启动与关闭时正确管理。
-- CORS跨域配置
-  - 在应用上注册CORSMiddleware，允许任意来源、凭证、方法与头，满足前端开发调试需求。
-- 路由注册机制
-  - 将各模块的APIRouter按前缀/api/v1统一注册，形成清晰的版本化API命名空间。
-- 健康检查端点
-  - 提供/api/v1/health用于快速检测服务状态。
+- 应用生命周期与中间件
+  - 使用异步生命周期上下文管理数据库初始化与Redis连接关闭。
+  - 配置CORS中间件允许任意来源、凭证、方法与头。
+- 配置系统（Config）
+  - 基于Pydantic设置类，从.env文件加载键值，提供全局缓存实例。
+- 数据库（Database）
+  - 异步SQLAlchemy引擎与会话工厂，提供依赖注入的会话获取器，并在启动时创建表。
+- Redis（Redis）
+  - 单例连接池封装，提供获取与关闭接口。
+- 安全工具（Security）
+  - 密码哈希、校验与JWT签发/解码工具，基于配置参数工作。
 
-**章节来源**
-- [backend/app/main.py:13-48](file://backend/app/main.py#L13-L48)
+章节来源
+- [backend/app/main.py:13-27](file://backend/app/main.py#L13-L27)
+- [backend/app/main.py:29-36](file://backend/app/main.py#L29-L36)
+- [backend/app/core/config.py:5-43](file://backend/app/core/config.py#L5-L43)
+- [backend/app/core/database.py:7-25](file://backend/app/core/database.py#L7-L25)
+- [backend/app/core/redis.py:10-25](file://backend/app/core/redis.py#L10-L25)
+- [backend/app/core/security.py:10-30](file://backend/app/core/security.py#L10-L30)
 
 ## 架构总览
-下图展示了应用启动的关键路径：配置加载、数据库初始化、Redis连接建立、CORS与路由注册，以及健康检查端点暴露。
+下图展示应用启动、中间件装配、路由注册与核心服务交互的总体流程。
 
 ```mermaid
 sequenceDiagram
-participant U as "用户/客户端"
-participant A as "FastAPI应用(main.py)"
-participant L as "生命周期(lifespan)"
-participant DB as "数据库(database.py)"
-participant RD as "Redis(redis.py)"
-participant API as "API路由(api/v1/*)"
-participant WS as "WebSocket(api/websocket.py)"
+participant U as "客户端"
+participant A as "FastAPI应用<br/>main.py"
+participant L as "生命周期<br/>lifespan"
+participant DB as "数据库引擎<br/>database.py"
+participant R as "Redis连接池<br/>redis.py"
+participant M as "CORS中间件"
+participant RT as "路由注册<br/>include_router"
+participant Q as "行情路由<br/>quote.py"
+participant W as "自选股路由<br/>watchlist.py"
+participant S as "股票路由<br/>stock.py"
+participant AI as "AI路由<br/>ai.py"
+participant WS as "WebSocket<br/>websocket.py"
 U->>A : "启动应用"
-A->>L : "进入lifespan启动阶段"
-L->>DB : "init_db() 创建表结构"
-DB-->>L : "初始化完成"
-L-->>A : "yield控制权"
-A->>A : "注册CORS与路由"
-A-->>U : "服务就绪"
-U->>API : "GET /api/v1/health"
-API-->>U : "返回健康状态"
-U->>WS : "建立WebSocket连接"
-WS-->>U : "订阅/推送行情"
+A->>L : "调用生命周期"
+L->>DB : "初始化数据库"
+L->>R : "保持连接可用"
+A->>M : "添加CORS中间件"
+A->>RT : "注册v1路由"
+RT-->>Q : "quote"
+RT-->>W : "watchlist"
+RT-->>S : "stock"
+RT-->>AI : "ai"
+RT-->>WS : "websocket"
+U->>A : "访问 /api/v1/health"
+A-->>U : "{status : ok}"
 ```
 
-**图表来源**
+图表来源
 - [backend/app/main.py:13-48](file://backend/app/main.py#L13-L48)
 - [backend/app/core/database.py:23-25](file://backend/app/core/database.py#L23-L25)
 - [backend/app/core/redis.py:21-25](file://backend/app/core/redis.py#L21-L25)
-- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
 - [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
-- [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
 - [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
+- [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
+- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
 - [backend/app/api/websocket.py:1-79](file://backend/app/api/websocket.py#L1-L79)
 
 ## 详细组件分析
 
-### 配置管理（Settings与环境变量加载）
-- 配置类Settings继承自BaseSettings，从.env文件加载键值，包含应用环境、数据库URL、Redis地址、AI适配器与服务参数、Celery消息队列、行情采集间隔与缓存TTL、JWT密钥与算法等。
-- 使用lru_cache装饰的工厂函数get_settings，避免重复解析配置，提升性能。
-- 最佳实践
-  - 将敏感信息（如数据库密码、JWT密钥）置于环境变量或容器机密中，不直接写入代码仓库。
-  - 在生产环境设置APP_ENV=production，禁用APP_DEBUG，确保日志与SQL回显仅在开发环境开启。
-  - 对关键配置项进行默认值设定与范围约束，结合异常处理保证启动失败可定位。
-
-**章节来源**
-- [backend/app/core/config.py:5-43](file://backend/app/core/config.py#L5-L43)
-
-### 数据库连接与初始化
-- 引擎与会话
-  - 使用异步引擎create_async_engine，连接字符串来自配置；会话工厂async_sessionmaker提供AsyncSession实例，expire_on_commit=False减少对象过期带来的问题。
-- 会话依赖
-  - get_db提供基于上下文管理的异步生成器，确保每次请求创建新会话并在finally中关闭，避免连接泄漏。
-- 初始化流程
-  - init_db在lifespan启动阶段执行，使用engine.begin()连接并调用Base.metadata.create_all创建所有表，确保应用启动即具备完整Schema。
-- 最佳实践
-  - 生产环境适当增大pool_size与max_overflow，结合连接超时与重试策略。
-  - 在事务边界明确commit/rollback，避免长时间持有会话导致锁竞争。
+### 应用入口与生命周期管理
+- 生命周期
+  - 启动阶段：初始化数据库（创建所有表）。
+  - 关闭阶段：关闭Redis连接池，释放资源。
+- 中间件
+  - CORS中间件允许任意来源、凭证、方法与头，便于前后端联调与跨域通信。
+- 路由注册
+  - 统一前缀/api/v1，注册quote、stock、watchlist、ai与websocket路由。
+- 健康检查
+  - 提供/version与状态查询接口，便于监控与部署验证。
 
 ```mermaid
 flowchart TD
-Start(["应用启动"]) --> LoadCfg["加载配置"]
-LoadCfg --> CreateEngine["创建异步引擎"]
-CreateEngine --> InitDB["执行元数据创建"]
-InitDB --> Ready["服务就绪"]
-Ready --> Request["HTTP请求"]
-Request --> GetDB["获取AsyncSession"]
-GetDB --> UseDB["执行查询/事务"]
-UseDB --> CloseDB["关闭会话"]
-CloseDB --> Ready
+Start(["应用启动"]) --> InitDB["初始化数据库<br/>create_all"]
+InitDB --> RunApp["运行应用"]
+RunApp --> Health["/api/v1/health"]
+RunApp --> CORS["CORS中间件启用"]
+RunApp --> RegRoutes["include_router 注册v1路由"]
+RunApp --> CloseRedis["应用关闭时关闭Redis"]
+CloseRedis --> End(["优雅退出"])
 ```
 
-**图表来源**
-- [backend/app/core/database.py:7-25](file://backend/app/core/database.py#L7-L25)
-- [backend/app/core/config.py:12-12](file://backend/app/core/config.py#L12-L12)
+图表来源
+- [backend/app/main.py:13-48](file://backend/app/main.py#L13-L48)
+- [backend/app/core/database.py:23-25](file://backend/app/core/database.py#L23-L25)
+- [backend/app/core/redis.py:21-25](file://backend/app/core/redis.py#L21-L25)
 
-**章节来源**
-- [backend/app/core/database.py:1-25](file://backend/app/core/database.py#L1-L25)
+章节来源
+- [backend/app/main.py:13-48](file://backend/app/main.py#L13-L48)
 
-### Redis缓存连接管理
-- 连接池
-  - get_redis通过全局变量维护aioredis连接池，首次调用时解析REDIS_URL并创建连接，后续复用以降低握手开销。
-- 生命周期清理
-  - close_redis在lifespan关闭阶段调用，确保应用退出时释放Redis连接，避免进程悬挂。
-- 最佳实践
-  - 在高并发场景下，合理设置连接池大小与超时时间；对键空间进行命名规范，便于运维与清理。
-  - 对需要持久化的缓存数据，配合TTL与过期策略，避免无限增长。
+### 配置管理系统（Config）
+- 设计要点
+  - 使用Pydantic设置类，自动从.env文件加载键值，支持类型校验与默认值。
+  - 使用LRU缓存函数提供全局唯一配置实例，避免重复解析。
+- 关键配置项（节选）
+  - 应用环境与调试开关、密钥与版本信息。
+  - 数据库URL、Redis URL。
+  - 主/备用数据源名称。
+  - AI适配器、服务地址、超时、缓存开关与TTL、限流。
+  - Celery消息代理与结果后端。
+  - 行情采集间隔与缓存TTL。
+  - JWT密钥、算法与过期分钟数。
+- 使用方法
+  - 在其他模块通过get_settings()获取统一配置实例，读取对应字段。
+
+```mermaid
+classDiagram
+class Settings {
++APP_ENV : string
++APP_DEBUG : bool
++APP_SECRET_KEY : string
++DATABASE_URL : string
++REDIS_URL : string
++PRIMARY_DATA_SOURCE : string
++FALLBACK_DATA_SOURCE : string
++AI_ADAPTER : string
++AI_SERVICE_URL : string
++AI_REQUEST_TIMEOUT : int
++AI_CACHE_ENABLED : bool
++AI_CACHE_TTL : int
++AI_RATE_LIMIT : int
++CELERY_BROKER_URL : string
++CELERY_RESULT_BACKEND : string
++QUOTE_COLLECT_INTERVAL : int
++QUOTE_CACHE_TTL : int
++JWT_SECRET_KEY : string
++JWT_ALGORITHM : string
++JWT_EXPIRE_MINUTES : int
+}
+class Config {
++env_file : string
++env_file_encoding : string
+}
+Settings <|-- Config : "继承"
+```
+
+图表来源
+- [backend/app/core/config.py:5-43](file://backend/app/core/config.py#L5-L43)
+
+章节来源
+- [backend/app/core/config.py:5-43](file://backend/app/core/config.py#L5-L43)
+
+### 数据库连接初始化（Database）
+- 引擎与会话
+  - 创建异步引擎，开启调试日志输出，设置连接池大小与溢出上限。
+  - 会话工厂以AsyncSession为基类，关闭时不会过早失效。
+- 依赖注入
+  - 提供get_db异步生成器，确保每次请求创建独立会话并在finally中关闭。
+- 初始化与建模
+  - init_db在启动时使用引擎连接执行元数据建表。
+  - 所有ORM模型继承自Base，统一管理表结构。
 
 ```mermaid
 sequenceDiagram
-participant A as "应用(main.py)"
-participant R as "Redis(get_redis)"
-participant P as "连接池(_redis_pool)"
-A->>R : "首次获取Redis连接"
-R->>P : "检查连接池是否存在"
-alt 未初始化
-R->>P : "从URL创建连接并缓存"
-else 已存在
-R->>P : "复用现有连接"
-end
-A-->>R : "返回Redis实例"
-Note over A,P : "应用关闭时调用close_redis()"
-A->>R : "close_redis()"
-R->>P : "关闭连接并清空池"
+participant App as "应用"
+participant DB as "database.py"
+participant Engine as "AsyncEngine"
+participant Session as "AsyncSession"
+App->>DB : "init_db()"
+DB->>Engine : "begin() 创建连接"
+Engine-->>DB : "conn"
+DB->>Engine : "run_sync(create_all)"
+App->>DB : "get_db() 依赖注入"
+DB->>Session : "async_session() 创建会话"
+Session-->>DB : "yield 会话"
+DB->>Session : "finally 关闭会话"
 ```
 
-**图表来源**
-- [backend/app/core/redis.py:10-25](file://backend/app/core/redis.py#L10-L25)
-- [backend/app/main.py:13-27](file://backend/app/main.py#L13-L27)
+图表来源
+- [backend/app/core/database.py:7-25](file://backend/app/core/database.py#L7-L25)
 
-**章节来源**
-- [backend/app/core/redis.py:1-25](file://backend/app/core/redis.py#L1-L25)
+章节来源
+- [backend/app/core/database.py:7-25](file://backend/app/core/database.py#L7-L25)
+- [backend/app/models/models.py:1-74](file://backend/app/models/models.py#L1-L74)
 
-### CORS跨域与中间件配置
-- CORS配置
-  - 允许任意来源、凭证、方法与头，满足前端开发调试与跨域访问需求。
-- 中间件注册
-  - 通过add_middleware注册CORSMiddleware，作为应用级中间件对所有路由生效。
-- 最佳实践
-  - 生产环境应限制allow_origins为可信域名列表，避免安全风险。
-  - 明确允许的方法与头，减少预检请求的复杂度。
-
-**章节来源**
-- [backend/app/main.py:29-36](file://backend/app/main.py#L29-L36)
-
-### 路由注册与API设计
-- 版本化命名空间
-  - 所有API路由均以/api/v1为前缀，便于未来版本演进与兼容性管理。
-- 路由模块
-  - AI分析、行情、股票、自选股分别定义独立的APIRouter，职责清晰。
+### Redis缓存管理（Redis）
+- 连接池
+  - 通过aioredis从URL解析连接，设置编码与响应解码，全局单例避免重复创建。
 - 依赖注入
-  - 自选股模块通过Depends(get_db)注入AsyncSession，体现依赖倒置与测试友好性。
-- 最佳实践
-  - 统一响应结构（code/message/data），便于前端一致处理。
-  - 对外部API调用设置合理超时与重试，避免阻塞请求线程。
+  - 提供get_redis异步获取连接的方法。
+- 资源关闭
+  - 应用关闭时调用close_redis，释放连接池并清空引用。
 
-**章节来源**
-- [backend/app/main.py:38-43](file://backend/app/main.py#L38-L43)
-- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
+```mermaid
+flowchart TD
+Get["调用 get_redis()"] --> Check{"连接池存在？"}
+Check -- "否" --> Create["从URL创建连接池"]
+Check -- "是" --> Return["返回现有连接池"]
+Create --> Return
+Close["调用 close_redis()"] --> ClosePool["关闭连接池并置空"]
+```
+
+图表来源
+- [backend/app/core/redis.py:10-25](file://backend/app/core/redis.py#L10-L25)
+
+章节来源
+- [backend/app/core/redis.py:10-25](file://backend/app/core/redis.py#L10-L25)
+
+### 依赖注入机制
+- 数据库会话
+  - API路由通过Depends(get_db)注入AsyncSession，确保事务隔离与自动清理。
+- 配置
+  - 各模块通过get_settings()读取统一配置，避免硬编码。
+- 采集器
+  - 路由层通过CollectorManager统一调度多个数据源，内部依赖具体采集器实现。
+
+```mermaid
+sequenceDiagram
+participant Client as "客户端"
+participant Router as "API路由"
+participant DBDep as "Depends(get_db)"
+participant DB as "AsyncSession"
+participant CM as "CollectorManager"
+participant EC as "EastMoneyCollector"
+Client->>Router : "GET /api/v1/quote/realtime"
+Router->>DBDep : "注入数据库会话"
+DBDep-->>Router : "AsyncSession"
+Router->>CM : "fetch_quote(symbol)"
+CM->>EC : "调用具体采集器"
+EC-->>CM : "返回行情数据"
+CM-->>Router : "返回聚合结果"
+Router-->>Client : "JSON响应"
+```
+
+图表来源
+- [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
+- [backend/app/core/database.py:15-20](file://backend/app/core/database.py#L15-L20)
+- [backend/app/services/collector/manager.py:21-33](file://backend/app/services/collector/manager.py#L21-L33)
+- [backend/app/services/collector/eastmoney.py:69-85](file://backend/app/services/collector/eastmoney.py#L69-L85)
+
+章节来源
+- [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
+- [backend/app/core/database.py:15-20](file://backend/app/core/database.py#L15-L20)
+- [backend/app/services/collector/manager.py:12-94](file://backend/app/services/collector/manager.py#L12-L94)
+- [backend/app/services/collector/eastmoney.py:26-297](file://backend/app/services/collector/eastmoney.py#L26-L297)
+
+### 中间件与异常处理策略
+- CORS中间件
+  - 已在应用入口启用，允许任意来源、凭证、方法与头，便于开发与跨域通信。
+- 异常处理
+  - 当前未显式注册全局异常处理器。建议在应用入口处注册统一异常处理器，捕获业务异常与HTTP异常，返回标准化响应体（参考响应模型）。
+
+章节来源
+- [backend/app/main.py:29-36](file://backend/app/main.py#L29-L36)
+- [backend/app/schemas/schemas.py:6-103](file://backend/app/schemas/schemas.py#L6-L103)
+
+### 应用启动流程、资源管理与优雅关闭
+- 启动流程
+  - 加载配置 → 初始化数据库（建表） → 启动应用 → 注册CORS与路由 → 健康检查可用。
+- 资源管理
+  - 数据库引擎与会话工厂在模块级创建，避免重复初始化；会话在请求作用域内创建与销毁。
+  - Redis连接池为全局单例，减少连接开销。
+- 优雅关闭
+  - 生命周期结束时关闭Redis连接池，确保资源回收。
+
+```mermaid
+stateDiagram-v2
+[*] --> 初始化配置
+初始化配置 --> 初始化数据库
+初始化数据库 --> 启动应用
+启动应用 --> 注册CORS与路由
+注册CORS与路由 --> 运行中
+运行中 --> 关闭Redis
+关闭Redis --> [*]
+```
+
+图表来源
+- [backend/app/main.py:13-48](file://backend/app/main.py#L13-L48)
+- [backend/app/core/database.py:23-25](file://backend/app/core/database.py#L23-L25)
+- [backend/app/core/redis.py:21-25](file://backend/app/core/redis.py#L21-L25)
+
+章节来源
+- [backend/app/main.py:13-48](file://backend/app/main.py#L13-L48)
+- [backend/app/core/database.py:23-25](file://backend/app/core/database.py#L23-L25)
+- [backend/app/core/redis.py:21-25](file://backend/app/core/redis.py#L21-L25)
+
+### API路由与业务逻辑
+- 行情数据（quote）
+  - 实时行情、列表、K线、分时、盘口接口，统一返回响应模型，错误时返回特定错误码。
+- 股票搜索（stock）
+  - 基于东方财富建议接口的搜索，限制返回A股并进行简单过滤。
+- 自选股（watchlist）
+  - 列表、新增、删除、排序接口，使用数据库会话完成持久化。
+- AI分析（ai）
+  - 通过适配器调用AI分析服务，支持获取模型信息。
+- WebSocket（websocket）
+  - 连接管理器维护活跃连接与订阅关系，支持订阅/退订与心跳。
+
+```mermaid
+graph TB
+subgraph "API v1"
+Q["quote.py<br/>实时/列表/K线/分时/盘口"]
+S["stock.py<br/>搜索"]
+W["watchlist.py<br/>增删改查"]
+AI["ai.py<br/>分析/历史/模型信息"]
+WS["websocket.py<br/>连接管理/广播"]
+end
+Q --> CM["CollectorManager"]
+CM --> EM["EastMoneyCollector"]
+W --> DB["AsyncSession"]
+AI --> AD["AI适配器"]
+WS --> RM["Redis连接池"]
+```
+
+图表来源
 - [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
 - [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
 - [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
+- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
+- [backend/app/api/websocket.py:1-79](file://backend/app/api/websocket.py#L1-L79)
+- [backend/app/services/collector/manager.py:12-94](file://backend/app/services/collector/manager.py#L12-L94)
+- [backend/app/services/collector/eastmoney.py:26-297](file://backend/app/services/collector/eastmoney.py#L26-L297)
 
-### WebSocket与实时推送
-- 连接管理
-  - ConnectionManager维护活动连接与订阅关系，支持订阅/退订与心跳ping/pong。
-- 广播机制
-  - broadcast_quote_update根据订阅关系向客户端推送行情更新，异常断连自动清理。
-- 最佳实践
-  - 对消息格式进行校验与限流，防止恶意订阅与广播风暴。
-  - 结合Redis或任务队列实现跨节点广播，扩展至分布式部署。
-
-**章节来源**
+章节来源
+- [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
+- [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
+- [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
+- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
 - [backend/app/api/websocket.py:1-79](file://backend/app/api/websocket.py#L1-L79)
 
-### 安全与认证辅助
-- 密码哈希与校验
-  - 使用bcrypt进行密码哈希与验证，保障用户凭据安全。
-- JWT工具
-  - 支持基于配置的密钥与算法生成/解码访问令牌，便于后续鉴权中间件集成。
-- 最佳实践
-  - 生产环境使用强随机密钥与安全算法，定期轮换。
-  - 对令牌有效期与刷新策略进行统一管理。
+### 数据模型与序列化模型
+- 数据模型（ORM）
+  - 包含股票基础信息、日线行情、分时数据、自选股与AI分析日志等表结构。
+- 序列化模型（Pydantic）
+  - 定义通用响应体、行情、K线、分时、盘口、自选股排序、AI分析请求与响应等结构。
 
-**章节来源**
-- [backend/app/core/security.py:1-30](file://backend/app/core/security.py#L1-L30)
+```mermaid
+erDiagram
+STOCK_INFO {
+bigint id PK
+string symbol
+string name
+string market
+string industry
+string sector
+date list_date
+bigint total_shares
+bigint float_shares
+boolean is_active
+timestamp created_at
+timestamp updated_at
+}
+QUOTE_DAILY {
+bigint id PK
+string symbol
+date trade_date
+numeric open
+numeric high
+numeric low
+numeric close
+bigint volume
+numeric amount
+numeric turnover_rate
+numeric amplitude
+numeric change_pct
+timestamp created_at
+}
+QUOTE_TICK {
+bigint id PK
+string symbol
+date trade_date
+text tick_data
+timestamp created_at
+}
+WATCHLIST {
+bigint id PK
+bigint user_id
+string symbol
+string market
+int sort_order
+string group_name
+timestamp added_at
+}
+AI_ANALYSIS_LOG {
+bigint id PK
+string symbol
+string analysis_type
+string model_version
+text request_params
+text result_data
+string trend
+numeric confidence
+int duration_ms
+timestamp created_at
+}
+```
+
+图表来源
+- [backend/app/models/models.py:5-74](file://backend/app/models/models.py#L5-L74)
+- [backend/app/schemas/schemas.py:6-103](file://backend/app/schemas/schemas.py#L6-L103)
+
+章节来源
+- [backend/app/models/models.py:1-74](file://backend/app/models/models.py#L1-L74)
+- [backend/app/schemas/schemas.py:1-103](file://backend/app/schemas/schemas.py#L1-L103)
+
+### 安全与认证工具
+- 密码处理
+  - 使用bcrypt进行密码哈希与校验。
+- JWT工具
+  - 支持签发带过期时间的访问令牌与解码验证，基于配置中的密钥与算法。
+
+章节来源
+- [backend/app/core/security.py:10-30](file://backend/app/core/security.py#L10-L30)
 
 ## 依赖分析
-- 组件耦合
-  - main.py集中协调配置、数据库、Redis与路由，是应用的编排中心。
-  - API模块依赖数据库会话与Redis连接，体现清晰的依赖注入。
+- 模块耦合
+  - main.py集中编排配置、数据库、Redis与路由，耦合度适中。
+  - API路由依赖数据库会话与采集器管理器，形成清晰的职责边界。
 - 外部依赖
-  - SQLAlchemy异步ORM、aioredis、FastAPI中间件生态。
+  - FastAPI、SQLAlchemy异步、aioredis、httpx、Pydantic Settings等。
 - 循环依赖
-  - 当前结构未见循环导入；若后续引入共享模型或工具模块，需注意模块拆分与延迟导入。
+  - 当前结构未见循环导入迹象。
 
 ```mermaid
 graph LR
-MAIN["main.py"] --> CFG["config.py"]
-MAIN --> DB["database.py"]
-MAIN --> RDS["redis.py"]
-MAIN --> API_AI["api/v1/ai.py"]
-MAIN --> API_Q["api/v1/quote.py"]
-MAIN --> API_S["api/v1/stock.py"]
-MAIN --> API_W["api/v1/watchlist.py"]
-MAIN --> WS["api/websocket.py"]
-API_W --> DB
-API_AI --> RDS
-WS --> RDS
+Main["main.py"] --> Conf["config.py"]
+Main --> DB["database.py"]
+Main --> RD["redis.py"]
+Main --> APIQ["api/v1/quote.py"]
+Main --> APIS["api/v1/stock.py"]
+Main --> APIW["api/v1/watchlist.py"]
+Main --> APIAI["api/v1/ai.py"]
+Main --> WS["api/websocket.py"]
+APIQ --> CM["services/collector/manager.py"]
+APIW --> DB
+WS --> RD
 ```
 
-**图表来源**
+图表来源
 - [backend/app/main.py:1-48](file://backend/app/main.py#L1-L48)
 - [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
 - [backend/app/core/database.py:1-25](file://backend/app/core/database.py#L1-L25)
 - [backend/app/core/redis.py:1-25](file://backend/app/core/redis.py#L1-L25)
-- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
 - [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
 - [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
 - [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
+- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
 - [backend/app/api/websocket.py:1-79](file://backend/app/api/websocket.py#L1-L79)
+- [backend/app/services/collector/manager.py:1-94](file://backend/app/services/collector/manager.py#L1-L94)
 
-**章节来源**
+章节来源
 - [backend/app/main.py:1-48](file://backend/app/main.py#L1-L48)
 
 ## 性能考虑
-- 连接池优化
-  - 数据库：合理设置pool_size与max_overflow，结合连接超时与重试策略，避免峰值拥塞。
-  - Redis：复用连接池，避免频繁创建/销毁；对高并发场景评估连接上限。
+- 连接池与并发
+  - 数据库连接池大小与溢出上限已配置，建议结合实际QPS调优。
+  - Redis连接池为单例，避免频繁创建连接。
 - 异步I/O
-  - 使用异步数据库驱动与HTTP客户端，减少阻塞；对外部服务调用设置超时与重试。
+  - 使用异步HTTP客户端与异步数据库驱动，提升I/O密集场景吞吐。
 - 缓存策略
-  - 行情与AI分析结果结合TTL与缓存键空间管理，降低上游依赖压力。
-- 路由与中间件
-  - 将CORS等通用中间件前置，避免重复计算；按需启用调试日志，生产关闭SQL回显。
+  - 行情采集与AI分析可结合Redis缓存（当前AI缓存开关存在但未在采集器中直接体现），合理设置TTL降低上游压力。
+- 超时与重试
+  - 采集器对上游接口设置超时与指数回退重试，提高稳定性。
 
 ## 故障排查指南
-- 启动失败
-  - 检查DATABASE_URL与REDIS_URL是否可达；确认配置文件路径与编码正确。
-  - 查看lifespan启动阶段的数据库初始化错误与Redis连接异常。
-- 请求异常
-  - 数据库：确认get_db生成器是否正确yield与关闭；检查事务提交/回滚时机。
-  - Redis：确认连接池未被提前关闭；检查键空间命名与TTL设置。
-- WebSocket
-  - 观察ConnectionManager的订阅集合与断连清理逻辑；排查消息格式与异常吞没。
-- 响应一致性
-  - 统一code/message/data结构，便于前端快速定位错误码与业务异常。
+- 健康检查
+  - 访问/api/v1/health确认应用正常运行与版本信息。
+- 数据库问题
+  - 确认DATABASE_URL正确且数据库可达；查看初始化日志；检查权限与网络。
+- Redis问题
+  - 确认REDIS_URL正确；在应用关闭时是否触发close_redis；检查连接池状态。
+- CORS问题
+  - 若出现跨域错误，检查CORS中间件配置与前端请求头。
+- 采集器异常
+  - 查看采集器日志与重试记录；确认上游接口状态与反爬策略；必要时切换备用数据源。
 
-**章节来源**
-- [backend/app/core/database.py:15-25](file://backend/app/core/database.py#L15-L25)
+章节来源
+- [backend/app/main.py:46-48](file://backend/app/main.py#L46-L48)
+- [backend/app/core/database.py:23-25](file://backend/app/core/database.py#L23-L25)
 - [backend/app/core/redis.py:21-25](file://backend/app/core/redis.py#L21-L25)
-- [backend/app/api/websocket.py:12-79](file://backend/app/api/websocket.py#L12-L79)
+- [backend/app/services/collector/eastmoney.py:41-67](file://backend/app/services/collector/eastmoney.py#L41-L67)
 
 ## 结论
-Stock-View的FastAPI应用采用清晰的模块化架构：以main.py为中心编排配置、数据库与Redis资源，在lifespan中完成启动与清理；通过CORS与路由注册提供开放的API与WebSocket能力。该设计遵循依赖注入与异步I/O原则，具备良好的可扩展性与可维护性。建议在生产环境中进一步收紧CORS白名单、强化配置校验与密钥管理，并完善监控与告警体系以支撑稳定运行。
+本应用采用清晰的模块化架构：入口负责生命周期与中间件，核心模块提供配置、数据库与Redis管理，API层通过依赖注入与采集器管理器实现稳定的业务能力。建议后续补充全局异常处理、完善AI缓存策略与连接池参数调优，以进一步提升稳定性与可维护性。
+
+## 附录
+- 配置项速览（来自配置模块）
+  - 应用环境与调试、密钥与版本
+  - 数据库与Redis URL
+  - 主/备用数据源
+  - AI适配器、服务地址、超时、缓存与限流
+  - Celery代理与结果后端
+  - 行情采集间隔与缓存TTL
+  - JWT密钥、算法与过期时间
+- 最佳实践
+  - 使用Depends注入数据库会话，确保事务隔离与资源回收。
+  - 对外部接口设置超时与重试，避免阻塞。
+  - 统一响应模型，便于前端消费与监控。
+  - 在生产环境收紧CORS配置，仅允许必要来源与方法。
+  - 定期评估数据库与Redis连接池参数，结合监控指标优化。

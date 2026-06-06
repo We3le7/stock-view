@@ -1,18 +1,19 @@
 # API接口文档
 
 <cite>
-**本文档引用的文件**
+**本文引用的文件**
 - [backend/app/main.py](file://backend/app/main.py)
 - [backend/app/api/v1/quote.py](file://backend/app/api/v1/quote.py)
 - [backend/app/api/v1/stock.py](file://backend/app/api/v1/stock.py)
 - [backend/app/api/v1/watchlist.py](file://backend/app/api/v1/watchlist.py)
 - [backend/app/api/v1/ai.py](file://backend/app/api/v1/ai.py)
 - [backend/app/api/websocket.py](file://backend/app/api/websocket.py)
-- [backend/app/schemas/schemas.py](file://backend/app/schemas/schemas.py)
-- [backend/app/models/models.py](file://backend/app/models/models.py)
 - [backend/app/services/collector/manager.py](file://backend/app/services/collector/manager.py)
+- [backend/app/ai/interface.py](file://backend/app/ai/interface.py)
+- [backend/app/models/models.py](file://backend/app/models/models.py)
+- [backend/app/schemas/schemas.py](file://backend/app/schemas/schemas.py)
 - [backend/app/core/config.py](file://backend/app/core/config.py)
-- [backend/requirements.txt](file://backend/requirements.txt)
+- [frontend/src/api/index.ts](file://frontend/src/api/index.ts)
 - [README.md](file://README.md)
 </cite>
 
@@ -20,870 +21,390 @@
 1. [简介](#简介)
 2. [项目结构](#项目结构)
 3. [核心组件](#核心组件)
-4. [架构概览](#架构概览)
+4. [架构总览](#架构总览)
 5. [详细组件分析](#详细组件分析)
-6. [依赖分析](#依赖分析)
-7. [性能考虑](#性能考虑)
-8. [故障排除指南](#故障排除指南)
+6. [依赖关系分析](#依赖关系分析)
+7. [性能考量](#性能考量)
+8. [故障排查指南](#故障排查指南)
 9. [结论](#结论)
+10. [附录](#附录)
 
 ## 简介
-
-Stock-View是一个基于Python FastAPI框架开发的A股实时行情查看与AI分析平台。该项目参考了东方财富、同花顺等主流股票软件的核心功能，提供了完整的股票行情数据服务、AI分析功能和自选股管理能力。
-
-本项目采用现代化的技术栈：
-- **后端**: Python 3.11 + FastAPI + SQLAlchemy 2.0 (async)
-- **前端**: Vue 3 + TypeScript + Pinia + ECharts + Element Plus
-- **数据库**: PostgreSQL 15 + Redis 7
-- **部署**: Docker Compose + Nginx
+本文件为 Stock-View 项目的完整 API 接口文档，覆盖后端 RESTful API 与 WebSocket 实时推送接口。内容包括：
+- 行情 API：实时报价、K线、分时图、盘口数据
+- 股票 API：基本信息与搜索
+- 自选股 API：列表管理与排序
+- AI 分析 API：分析结果与模型信息
+- WebSocket 实时推送：消息格式、事件类型与连接管理
+- 认证机制、错误处理与数据验证规则
+- 请求/响应示例、SDK 使用指南与客户端集成最佳实践
 
 ## 项目结构
+后端采用 FastAPI + SQLAlchemy（异步）+ PostgreSQL + Redis 架构；前端使用 Vue 3 + TypeScript + Axios。API 命名空间为 /api/v1，各模块按功能划分。
 
 ```mermaid
 graph TB
-subgraph "后端应用"
-Main[app/main.py<br/>FastAPI入口]
-subgraph "API路由"
-Quote[api/v1/quote.py<br/>行情数据API]
-Stock[api/v1/stock.py<br/>股票基础API]
-Watchlist[api/v1/watchlist.py<br/>自选股API]
-AI[api/v1/ai.py<br/>AI分析API]
-WS[api/websocket.py<br/>WebSocket实时推送]
+subgraph "后端"
+A["FastAPI 应用<br/>app/main.py"]
+B["路由模块<br/>api/v1/*"]
+C["数据采集管理器<br/>services/collector/manager.py"]
+D["AI 适配器接口<br/>ai/interface.py"]
+E["数据库模型<br/>models/models.py"]
+F["数据校验模型<br/>schemas/schemas.py"]
+G["配置中心<br/>core/config.py"]
 end
-subgraph "核心模块"
-Schemas[schemas/schemas.py<br/>数据模型定义]
-Models[models/models.py<br/>数据库模型]
-Config[core/config.py<br/>配置管理]
+subgraph "前端"
+H["Axios 客户端封装<br/>frontend/src/api/index.ts"]
 end
-subgraph "服务层"
-Collector[services/collector/<br/>数据采集服务]
-Manager[collector/manager.py<br/>采集器管理器]
-end
-end
-Main --> Quote
-Main --> Stock
-Main --> Watchlist
-Main --> AI
-Main --> WS
-Quote --> Manager
-Stock --> Collector
-Watchlist --> Models
-AI --> Schemas
+A --> B
+B --> C
+B --> D
+B --> E
+B --> F
+A --> G
+H --> A
 ```
 
-**图表来源**
+图表来源
 - [backend/app/main.py:1-48](file://backend/app/main.py#L1-L48)
 - [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
 - [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
 - [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
 - [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
 - [backend/app/api/websocket.py:1-79](file://backend/app/api/websocket.py#L1-L79)
+- [backend/app/services/collector/manager.py:1-94](file://backend/app/services/collector/manager.py#L1-L94)
+- [backend/app/ai/interface.py:1-196](file://backend/app/ai/interface.py#L1-L196)
+- [backend/app/models/models.py:1-74](file://backend/app/models/models.py#L1-L74)
+- [backend/app/schemas/schemas.py:1-103](file://backend/app/schemas/schemas.py#L1-L103)
+- [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
+- [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
 
-**章节来源**
+章节来源
 - [backend/app/main.py:1-48](file://backend/app/main.py#L1-L48)
 - [README.md:92-126](file://README.md#L92-L126)
 
 ## 核心组件
+- FastAPI 应用与路由注册：统一挂载 /api/v1 下的子路由，并启用 CORS。
+- 数据采集管理器：按优先级轮询多个数据源（如东方财富、新浪），实现故障转移。
+- AI 分析适配器：抽象接口与多种实现（Mock、规则引擎），支持同步与流式分析。
+- 数据模型与校验：Pydantic 模型定义统一响应结构与业务实体字段。
+- 配置中心：集中管理数据库、Redis、AI 适配器、JWT 等配置项。
 
-### API路由注册机制
+章节来源
+- [backend/app/main.py:22-48](file://backend/app/main.py#L22-L48)
+- [backend/app/services/collector/manager.py:12-94](file://backend/app/services/collector/manager.py#L12-L94)
+- [backend/app/ai/interface.py:26-196](file://backend/app/ai/interface.py#L26-L196)
+- [backend/app/schemas/schemas.py:6-103](file://backend/app/schemas/schemas.py#L6-L103)
+- [backend/app/core/config.py:5-43](file://backend/app/core/config.py#L5-L43)
 
-系统通过FastAPI的路由注册机制统一管理各个功能模块：
+## 架构总览
+下图展示 API 调用链路与数据流向：
 
 ```mermaid
 sequenceDiagram
-participant App as 应用实例
-participant Quote as 行情API
-participant Stock as 股票API
-participant Watchlist as 自选股API
-participant AI as AI分析API
-participant WS as WebSocket
-App->>App : 初始化FastAPI应用
-App->>Quote : 注册行情路由(/api/v1/quote)
-App->>Stock : 注册股票路由(/api/v1/stock)
-App->>Watchlist : 注册自选股路由(/api/v1/watchlist)
-App->>AI : 注册AI路由(/api/v1/ai)
-App->>WS : 注册WebSocket路由(/api/v1/ws)
-App->>App : 启用CORS中间件
+participant Client as "客户端"
+participant API as "FastAPI 路由"
+participant CM as "采集管理器"
+participant DS as "数据源(东方财富/新浪)"
+participant DB as "数据库/缓存"
+Client->>API : "GET /api/v1/quote/realtime?symbols=..."
+API->>CM : "fetch_quote(symbol)"
+CM->>DS : "拉取实时行情"
+DS-->>CM : "行情数据"
+CM-->>API : "聚合后的行情"
+API-->>Client : "统一响应体(code,message,data)"
+Client->>API : "POST /api/v1/ai/analyze?symbol=..."
+API->>API : "解析参数"
+API->>API : "create_ai_adapter()"
+API-->>Client : "返回分析结果"
 ```
 
-**图表来源**
-- [backend/app/main.py:38-43](file://backend/app/main.py#L38-L43)
-
-### 数据模型架构
-
-系统采用Pydantic进行数据验证，定义了完整的数据传输对象：
-
-```mermaid
-classDiagram
-class ResponseBase {
-+int code
-+string message
-}
-class QuoteItem {
-+string symbol
-+string name
-+string market
-+float price
-+float change
-+float change_pct
-+float open
-+float high
-+float low
-+float prev_close
-+int volume
-+float amount
-+float turnover_rate
-+string timestamp
-}
-class KlineItem {
-+string date
-+float open
-+float high
-+float low
-+float close
-+int volume
-+float amount
-+float change_pct
-}
-class TimelinePoint {
-+string time
-+float price
-+float avg
-+int volume
-}
-class OrderBookLevel {
-+int level
-+float price
-+int volume
-}
-ResponseBase <|-- QuoteItem
-ResponseBase <|-- KlineItem
-ResponseBase <|-- TimelinePoint
-ResponseBase <|-- OrderBookLevel
-```
-
-**图表来源**
-- [backend/app/schemas/schemas.py:6-68](file://backend/app/schemas/schemas.py#L6-L68)
-
-**章节来源**
-- [backend/app/schemas/schemas.py:1-103](file://backend/app/schemas/schemas.py#L1-L103)
-- [backend/app/models/models.py:1-74](file://backend/app/models/models.py#L1-L74)
-
-## 架构概览
-
-```mermaid
-graph TB
-subgraph "客户端层"
-Browser[浏览器/移动端]
-Frontend[前端应用]
-end
-subgraph "API网关层"
-FastAPI[FastAPI应用]
-CORS[CORS中间件]
-end
-subgraph "业务逻辑层"
-QuoteAPI[行情API]
-StockAPI[股票API]
-WatchlistAPI[自选股API]
-AIAPI[AI分析API]
-WSAPI[WebSocket]
-end
-subgraph "数据访问层"
-DB[(PostgreSQL数据库)]
-Redis[(Redis缓存)]
-end
-subgraph "外部数据源"
-EM[东方财富数据源]
-SINA[新浪数据源]
-end
-Browser --> FastAPI
-Frontend --> FastAPI
-FastAPI --> CORS
-FastAPI --> QuoteAPI
-FastAPI --> StockAPI
-FastAPI --> WatchlistAPI
-FastAPI --> AIAPI
-FastAPI --> WSAPI
-QuoteAPI --> DB
-QuoteAPI --> Redis
-QuoteAPI --> EM
-QuoteAPI --> SINA
-StockAPI --> EM
-WatchlistAPI --> DB
-AIAPI --> DB
-AIAPI --> Redis
-```
-
-**图表来源**
-- [backend/app/main.py:22-43](file://backend/app/main.py#L22-L43)
-- [backend/app/services/collector/manager.py:12-80](file://backend/app/services/collector/manager.py#L12-L80)
+图表来源
+- [backend/app/api/v1/quote.py:7-16](file://backend/app/api/v1/quote.py#L7-L16)
+- [backend/app/api/v1/ai.py:10-15](file://backend/app/api/v1/ai.py#L10-L15)
+- [backend/app/services/collector/manager.py:21-33](file://backend/app/services/collector/manager.py#L21-L33)
+- [backend/app/ai/interface.py:190-196](file://backend/app/ai/interface.py#L190-L196)
 
 ## 详细组件分析
 
-### 行情数据API
+### 行情 API（/api/v1/quote）
+- 统一响应结构
+  - 字段：code（数字）、message（字符串，默认“success”）、data（对象或列表）
+  - 错误码示例：1002（股票不存在或数据源不可用）、1003（数据源暂不可用）
+- 端点与参数
+  - GET /quote/realtime
+    - 查询参数：symbols（必填，逗号分隔，最多 50 个）
+    - 返回：包含 items 的字典
+  - GET /quote/list
+    - 查询参数：market（all/sh/sz，默认 all）、sort_by（默认 change_pct）、sort_order（asc/desc，默认 desc）、page（>=1，默认 1）、page_size（1..100，默认 20）
+    - 返回：分页数据
+  - GET /quote/kline
+    - 查询参数：symbol（必填）、period（1m/5m/15m/30m/60m/d/w/m，默认 d）、fq_type（none/front/back，默认 front）、limit（1..500，默认 120）
+    - 返回：K线数据
+  - GET /quote/timeline
+    - 查询参数：symbol（必填）
+    - 返回：分时数据
+  - GET /quote/orderbook
+    - 查询参数：symbol（必填）
+    - 返回：盘口数据
+- 数据验证与限制
+  - 参数范围校验（ge/le）与默认值设置
+  - 实时行情最多取 50 个符号
+- 错误处理
+  - 数据源不可用时返回 1003
+  - 股票不存在或数据为空时返回 1002
 
-#### 实时行情接口
-
-**接口定义**
-- **路径**: `/api/v1/quote/realtime`
-- **方法**: GET
-- **功能**: 获取指定股票的实时行情数据
-
-**请求参数**
-| 参数名 | 类型 | 必填 | 描述 | 示例 |
-|--------|------|------|------|------|
-| symbols | string | 是 | 股票代码，多个用逗号分隔 | "000001,600036,300059" |
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "items": [
-      {
-        "symbol": "000001",
-        "name": "平安银行",
-        "market": "sz",
-        "price": 15.23,
-        "change": 0.12,
-        "change_pct": 0.79,
-        "open": 15.10,
-        "high": 15.30,
-        "low": 14.98,
-        "prev_close": 15.11,
-        "volume": 12345678,
-        "amount": 188888888.88,
-        "turnover_rate": 0.56,
-        "timestamp": "2024-01-01T10:30:00Z"
-      }
-    ]
-  }
-}
-```
-
-**错误响应示例**
-```json
-{
-  "code": 1003,
-  "message": "数据源暂不可用",
-  "data": null
-}
-```
-
-#### 行情列表接口
-
-**接口定义**
-- **路径**: `/api/v1/quote/list`
-- **方法**: GET
-- **功能**: 获取全市场的股票行情列表
-
-**请求参数**
-| 参数名 | 类型 | 必填 | 描述 | 默认值 | 示例 |
-|--------|------|------|------|--------|------|
-| market | string | 否 | 市场类型 | "all" | "sh,sz" |
-| sort_by | string | 否 | 排序字段 | "change_pct" | "volume" |
-| sort_order | string | 否 | 排序方向 | "desc" | "asc" |
-| page | int | 否 | 页码 | 1 | 2 |
-| page_size | int | 否 | 每页数量 | 20 | 50 |
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "items": [...],
-    "total": 1000,
-    "page": 1,
-    "page_size": 20
-  }
-}
-```
-
-#### K线数据接口
-
-**接口定义**
-- **路径**: `/api/v1/quote/kline`
-- **方法**: GET
-- **功能**: 获取指定股票的K线数据
-
-**请求参数**
-| 参数名 | 类型 | 必填 | 描述 | 默认值 | 示例 |
-|--------|------|------|------|--------|------|
-| symbol | string | 是 | 股票代码 | - | "000001" |
-| period | string | 否 | K线周期 | "d" | "5m,15m,30m,60m,w,m" |
-| fq_type | string | 否 | 复权类型 | "front" | "none,front,back" |
-| limit | int | 否 | 返回数量 | 120 | 200 |
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "symbol": "000001",
-    "period": "d",
-    "fq_type": "front",
-    "items": [
-      {
-        "date": "2024-01-01",
-        "open": 15.10,
-        "high": 15.30,
-        "low": 14.98,
-        "close": 15.23,
-        "volume": 12345678,
-        "amount": 188888888.88,
-        "change_pct": 0.79
-      }
-    ]
-  }
-}
-```
-
-#### 分时数据接口
-
-**接口定义**
-- **路径**: `/api/v1/quote/timeline`
-- **方法**: GET
-- **功能**: 获取指定股票的分时数据
-
-**请求参数**
-| 参数名 | 类型 | 必填 | 描述 | 示例 |
-|--------|------|------|------|------|
-| symbol | string | 是 | 股票代码 | "000001" |
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "symbol": "000001",
-    "items": [
-      {
-        "time": "09:30",
-        "price": 15.10,
-        "avg": 15.05,
-        "volume": 100000
-      }
-    ]
-  }
-}
-```
-
-#### 盘口数据接口
-
-**接口定义**
-- **路径**: `/api/v1/quote/orderbook`
-- **方法**: GET
-- **功能**: 获取指定股票的盘口数据
-
-**请求参数**
-| 参数名 | 类型 | 必填 | 描述 | 示例 |
-|--------|------|------|------|------|
-| symbol | string | 是 | 股票代码 | "000001" |
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "symbol": "000001",
-    "bid_levels": [
-      {
-        "level": 1,
-        "price": 15.22,
-        "volume": 1000
-      }
-    ],
-    "ask_levels": [
-      {
-        "level": 1,
-        "price": 15.23,
-        "volume": 1500
-      }
-    ]
-  }
-}
-```
-
-**章节来源**
+章节来源
 - [backend/app/api/v1/quote.py:7-65](file://backend/app/api/v1/quote.py#L7-L65)
-- [backend/app/schemas/schemas.py:13-67](file://backend/app/schemas/schemas.py#L13-L67)
+- [backend/app/schemas/schemas.py:12-68](file://backend/app/schemas/schemas.py#L12-L68)
 
-### 股票基础API
+### 股票 API（/api/v1/stock）
+- GET /stock/search
+  - 查询参数：keyword（必填）、limit（1..20，默认 10）
+  - 功能：调用东方财富建议接口，过滤 A 股，返回 symbol、name、market、pinyin
+  - 返回：包含 items 的字典
+- 注意
+  - 该接口直接调用外部服务，存在网络超时风险
 
-#### 股票搜索接口
-
-**接口定义**
-- **路径**: `/api/v1/stock/search`
-- **方法**: GET
-- **功能**: 搜索股票（支持代码和拼音首字母）
-
-**请求参数**
-| 参数名 | 类型 | 必填 | 描述 | 默认值 | 示例 |
-|--------|------|------|------|--------|------|
-| keyword | string | 是 | 搜索关键词 | - | "平安银行" |
-| limit | int | 否 | 返回数量限制 | 10 | 20 |
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "items": [
-      {
-        "symbol": "000001",
-        "name": "平安银行",
-        "market": "sz",
-        "pinyin": "payh"
-      }
-    ]
-  }
-}
-```
-
-**章节来源**
+章节来源
 - [backend/app/api/v1/stock.py:10-37](file://backend/app/api/v1/stock.py#L10-L37)
-- [backend/app/schemas/schemas.py:71-76](file://backend/app/schemas/schemas.py#L71-L76)
 
-### 自选股管理API
+### 自选股 API（/api/v1/watchlist）
+- GET /watchlist
+  - 功能：按 sort_order 升序返回当前用户（固定 ID=1）的自选股列表
+  - 返回：包含 items 的字典
+- POST /watchlist
+  - 请求体：{ symbol, market（默认 sh） }
+  - 功能：添加自选股，自动分配最大排序号+1
+  - 返回：成功无 data
+  - 错误：若已存在返回 1001
+- DELETE /watchlist/{symbol}
+  - 功能：删除指定 symbol 的自选股
+  - 返回：成功无 data
+- PUT /watchlist/sort
+  - 请求体：{ items: [{ symbol, sort_order }] }
+  - 功能：批量更新排序
+  - 返回：成功无 data
 
-#### 获取自选股列表
-
-**接口定义**
-- **路径**: `/api/v1/watchlist`
-- **方法**: GET
-- **功能**: 获取当前用户的自选股列表
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "items": [
-      {
-        "symbol": "000001",
-        "name": "",
-        "market": "sz",
-        "sort_order": 1
-      }
-    ]
-  }
-}
-```
-
-#### 添加自选股
-
-**接口定义**
-- **路径**: `/api/v1/watchlist`
-- **方法**: POST
-- **功能**: 添加自选股到用户列表
-
-**请求体格式**
-```json
-{
-  "symbol": "000001",
-  "market": "sz"
-}
-```
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": null
-}
-```
-
-#### 删除自选股
-
-**接口定义**
-- **路径**: `/api/v1/watchlist/{symbol}`
-- **方法**: DELETE
-- **功能**: 从用户自选股列表中删除指定股票
-
-**路径参数**
-| 参数名 | 类型 | 必填 | 描述 |
-|--------|------|------|------|
-| symbol | string | 是 | 股票代码 |
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": null
-}
-```
-
-#### 调整自选股排序
-
-**接口定义**
-- **路径**: `/api/v1/watchlist/sort`
-- **方法**: PUT
-- **功能**: 批量调整自选股的排序顺序
-
-**请求体格式**
-```json
-{
-  "items": [
-    {
-      "symbol": "000001",
-      "sort_order": 2
-    },
-    {
-      "symbol": "600036",
-      "sort_order": 1
-    }
-  ]
-}
-```
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": null
-}
-```
-
-**章节来源**
+章节来源
 - [backend/app/api/v1/watchlist.py:13-77](file://backend/app/api/v1/watchlist.py#L13-L77)
-- [backend/app/schemas/schemas.py:79-91](file://backend/app/schemas/schemas.py#L79-L91)
+- [backend/app/schemas/schemas.py:78-91](file://backend/app/schemas/schemas.py#L78-L91)
 - [backend/app/models/models.py:50-60](file://backend/app/models/models.py#L50-L60)
 
-### AI分析API
+### AI 分析 API（/api/v1/ai）
+- POST /ai/analyze
+  - 查询参数：symbol（必填）、analysis_type（默认 comprehensive）、period_days（默认 30）
+  - 功能：调用 AI 适配器执行分析，返回分析结果
+  - 返回：data 为适配器输出
+- GET /ai/history
+  - 查询参数：symbol（可选）、page（默认 1）、page_size（默认 20）
+  - 功能：预留接口，当前返回空列表
+- GET /ai/model-info
+  - 功能：返回当前适配器的模型信息（名称、版本、描述、支持类型、状态）
 
-#### AI分析请求
+AI 适配器
+- 支持适配器：mock、rule
+- MockAIAdapter：返回模拟分析结果与进度流
+- RuleEngineAdapter：基于 K 线规则的简易分析
 
-**接口定义**
-- **路径**: `/api/v1/ai/analyze`
-- **方法**: POST
-- **功能**: 请求AI对指定股票进行分析
-
-**请求参数**
-| 参数名 | 类型 | 必填 | 描述 | 默认值 |
-|--------|------|------|------|--------|
-| symbol | string | 是 | 股票代码 | - |
-| analysis_type | string | 否 | 分析类型 | "comprehensive" | "technical,fundamental,risk" |
-| period_days | int | 否 | 分析周期天数 | 30 | 60,90 |
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "symbol": "000001",
-    "analysis_type": "comprehensive",
-    "period_days": 30,
-    "trend": "bullish",
-    "confidence": 0.85,
-    "recommendation": "hold",
-    "indicators": {
-      "ma": [15.0, 15.2, 15.1],
-      "rsi": [62.3, 61.8, 60.5],
-      "macd": [0.12, 0.10, 0.08]
-    }
-  }
-}
-```
-
-#### AI模型信息
-
-**接口定义**
-- **路径**: `/api/v1/ai/model-info`
-- **方法**: GET
-- **功能**: 获取AI模型的详细信息
-
-**响应格式**
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "model_name": "stock-analyzer-v1",
-    "version": "1.0.0",
-    "supported_indicators": ["MA", "RSI", "MACD", "BOLL"],
-    "max_period_days": 365,
-    "accuracy": 0.85
-  }
-}
-```
-
-**章节来源**
+章节来源
 - [backend/app/api/v1/ai.py:10-29](file://backend/app/api/v1/ai.py#L10-L29)
-- [backend/app/schemas/schemas.py:94-103](file://backend/app/schemas/schemas.py#L94-L103)
+- [backend/app/ai/interface.py:26-196](file://backend/app/ai/interface.py#L26-L196)
+- [backend/app/core/config.py:19-24](file://backend/app/core/config.py#L19-L24)
 
-### WebSocket实时推送API
-
-#### 连接建立
-
-**WebSocket路径**: `ws://localhost:8000/api/v1/ws/quote`
-
-#### 订阅消息格式
-
-**订阅请求**
-```json
-{
-  "action": "subscribe",
-  "symbols": ["000001", "600036"],
-  "channels": ["quote"]
-}
-```
-
-**取消订阅请求**
-```json
-{
-  "action": "unsubscribe",
-  "symbols": ["000001"]
-}
-```
-
-#### 心跳检测
-
-**客户端发送**
-```json
-{
-  "action": "ping"
-}
-```
-
-**服务器响应**
-```json
-{
-  "action": "pong",
-  "timestamp": "2024-01-01T10:30:00Z"
-}
-```
-
-#### 行情推送格式
-
-**推送消息**
-```json
-{
-  "type": "quote",
-  "symbol": "000001",
-  "data": {
-    "symbol": "000001",
-    "name": "平安银行",
-    "market": "sz",
-    "price": 15.23,
-    "change": 0.12,
-    "change_pct": 0.79,
-    "timestamp": "2024-01-01T10:30:00Z"
-  }
-}
-```
-
-#### 连接管理
+### WebSocket 实时推送（/api/v1/ws/quote）
+- 连接与管理
+  - 路径：/api/v1/ws/quote
+  - 类：ConnectionManager（维护活动连接与订阅集合）
+- 客户端消息
+  - subscribe：{ action: "subscribe", symbols: [...], channels: [...] }
+  - unsubscribe：{ action: "unsubscribe", symbols: [...] }
+  - ping：{ action: "ping" } → 服务器回 pong
+- 服务器推送
+  - 广播消息：{ type: "quote", symbol, data }
+  - 订阅确认：{ action: "subscribed", symbols, channels }
+- 断开处理
+  - 捕获 WebSocketDisconnect，清理连接与订阅
 
 ```mermaid
-stateDiagram-v2
-[*] --> 连接建立
-连接建立 --> 订阅状态 : 接收订阅请求
-订阅状态 --> 订阅状态 : 接收推送数据
-订阅状态 --> 断开连接 : 客户端断开
-订阅状态 --> 断开连接 : 服务器异常
-断开连接 --> [*]
+sequenceDiagram
+participant Client as "客户端"
+participant WS as "WebSocket 服务"
+participant CM as "连接管理器"
+participant PubSub as "Redis(可选)"
+Client->>WS : "CONNECT /api/v1/ws/quote"
+WS->>CM : "connect(websocket)"
+Client->>WS : "{action : 'subscribe', symbols : [...], channels : [...]}"
+WS->>CM : "更新订阅集合"
+WS-->>Client : "{action : 'subscribed', ...}"
+Note over PubSub : "当有行情更新时"
+PubSub-->>WS : "推送行情数据"
+WS->>CM : "遍历订阅者"
+CM-->>Client : "{type : 'quote', symbol, data}"
+Client->>WS : "{action : 'ping'}"
+WS-->>Client : "{action : 'pong', timestamp}"
 ```
 
-**图表来源**
+图表来源
 - [backend/app/api/websocket.py:39-79](file://backend/app/api/websocket.py#L39-L79)
+- [backend/app/api/websocket.py:12-36](file://backend/app/api/websocket.py#L12-L36)
 
-**章节来源**
-- [backend/app/api/websocket.py:12-79](file://backend/app/api/websocket.py#L12-L79)
-
-## 依赖分析
-
-### 外部依赖关系
-
-```mermaid
-graph TB
-subgraph "核心依赖"
-FastAPI[fastapi==0.110.*]
-Uvicorn[uvicorn==0.29.*]
-Pydantic[pydantic==2.6.*]
-PydanticSettings[pydantic-settings==2.2.*]
-end
-subgraph "数据库相关"
-SQLAlchemy[sqlalchemy==2.0.*]
-AsyncPG[asyncpg==0.29.*]
-Alembic[alembic==1.13.*]
-end
-subgraph "缓存相关"
-Redis[redis==5.0.*]
-end
-subgraph "网络相关"
-HTTPX[httpx==0.27.*]
-Celery[celery==5.3.*]
-end
-subgraph "数据分析"
-TA[talib==0.11.*]
-Pandas[pandas==2.2.*]
-NumPy[numpy==1.26.*]
-end
-subgraph "其他"
-Crypto[python-jose==3.3.*]
-Passlib[passlib==1.7.*]
-DotEnv[python-dotenv==1.0.*]
-Multipart[python-multipart==0.0.9]
-end
-```
-
-**图表来源**
-- [backend/requirements.txt:1-17](file://backend/requirements.txt#L1-L17)
-
-### 内部模块依赖
+## 依赖关系分析
+- 路由与应用
+  - app/main.py 注册 /api/v1 下的所有子路由
+- 数据采集
+  - quote.* 调用 CollectorManager，后者按优先级选择具体采集器
+- AI 分析
+  - ai.* 调用 create_ai_adapter(settings.AI_ADAPTER)，返回适配器实例
+- 数据模型与校验
+  - schemas 定义统一响应与业务实体；models 定义数据库表结构
 
 ```mermaid
 graph LR
-Main[main.py] --> Quote[quote.py]
-Main --> Stock[stock.py]
-Main --> Watchlist[watchlist.py]
-Main --> AI[ai.py]
-Main --> WS[websocket.py]
-Quote --> Manager[collector/manager.py]
-Quote --> Schemas[schemas.py]
-Quote --> Models[models.py]
-Stock --> EastMoney[eastmoney.py]
-Stock --> Schemas
-Watchlist --> Models
-Watchlist --> Schemas
-AI --> Schemas
-AI --> Config[config.py]
-WS --> Redis[redis.py]
+M["main.py"] --> Q["quote.py"]
+M --> S["stock.py"]
+M --> W["watchlist.py"]
+M --> A["ai.py"]
+M --> WS["websocket.py"]
+Q --> CM["collector/manager.py"]
+A --> IF["ai/interface.py"]
+IF --> CFG["core/config.py"]
+Q --> SC["schemas/schemas.py"]
+W --> MD["models/models.py"]
 ```
 
-**图表来源**
-- [backend/app/main.py:7-8](file://backend/app/main.py#L7-L8)
-- [backend/app/api/v1/quote.py:1-2](file://backend/app/api/v1/quote.py#L1-L2)
-- [backend/app/api/v1/stock.py:1-2](file://backend/app/api/v1/stock.py#L1-L2)
-- [backend/app/api/v1/watchlist.py:1-6](file://backend/app/api/v1/watchlist.py#L1-L6)
-- [backend/app/api/v1/ai.py:1-3](file://backend/app/api/v1/ai.py#L1-L3)
+图表来源
+- [backend/app/main.py:39-43](file://backend/app/main.py#L39-L43)
+- [backend/app/api/v1/quote.py:1-4](file://backend/app/api/v1/quote.py#L1-L4)
+- [backend/app/api/v1/stock.py:1-4](file://backend/app/api/v1/stock.py#L1-L4)
+- [backend/app/api/v1/watchlist.py:1-8](file://backend/app/api/v1/watchlist.py#L1-L8)
+- [backend/app/api/v1/ai.py:1-5](file://backend/app/api/v1/ai.py#L1-L5)
+- [backend/app/api/websocket.py:1-9](file://backend/app/api/websocket.py#L1-L9)
+- [backend/app/services/collector/manager.py:12-20](file://backend/app/services/collector/manager.py#L12-L20)
+- [backend/app/ai/interface.py:190-196](file://backend/app/ai/interface.py#L190-L196)
+- [backend/app/core/config.py:19-24](file://backend/app/core/config.py#L19-L24)
+- [backend/app/schemas/schemas.py:6-10](file://backend/app/schemas/schemas.py#L6-L10)
+- [backend/app/models/models.py:1-3](file://backend/app/models/models.py#L1-L3)
 
-**章节来源**
-- [backend/requirements.txt:1-17](file://backend/requirements.txt#L1-L17)
-- [backend/app/main.py:7-8](file://backend/app/main.py#L7-L8)
+章节来源
+- [backend/app/main.py:39-43](file://backend/app/main.py#L39-L43)
+- [backend/app/services/collector/manager.py:12-94](file://backend/app/services/collector/manager.py#L12-L94)
+- [backend/app/ai/interface.py:190-196](file://backend/app/ai/interface.py#L190-L196)
 
-## 性能考虑
+## 性能考量
+- 数据采集与缓存
+  - 配置项 QUOTE_CACHE_TTL 控制缓存时间；PRIMARY_DATA_SOURCE 与 FALLBACK_DATA_SOURCE 提供故障转移
+- AI 分析
+  - AI_CACHE_ENABLED/AI_CACHE_TTL 控制缓存；AI_RATE_LIMIT 限制速率
+- 网络超时
+  - 股票搜索接口使用短超时（示例 5 秒），避免阻塞
+- 建议
+  - 前端对高频请求进行去抖/节流
+  - WebSocket 订阅按需增减，避免过多 symbol 导致广播压力
 
-### 数据缓存策略
+章节来源
+- [backend/app/core/config.py:29-31](file://backend/app/core/config.py#L29-L31)
+- [backend/app/core/config.py:22-25](file://backend/app/core/config.py#L22-L25)
+- [backend/app/api/v1/stock.py:16-22](file://backend/app/api/v1/stock.py#L16-L22)
 
-系统采用了多层缓存机制来提升性能：
+## 故障排查指南
+- 常见错误码
+  - 1002：股票代码不存在或数据源不可用
+  - 1003：数据源暂不可用
+  - 1001：已在自选股中（重复添加）
+- 日志与可观测性
+  - 采集器在切换数据源时记录 warning；所有数据源失败时记录 error
+- 建议排查步骤
+  - 检查数据源连通性与可用性
+  - 核对 symbol 格式与市场前缀
+  - 确认 WebSocket 订阅是否正确发送 subscribe 消息
+  - 查看后端日志定位异常
 
-1. **Redis缓存**: 存储热点数据和临时结果
-2. **数据库缓存**: 使用SQLAlchemy的异步特性
-3. **API响应缓存**: 对频繁访问的数据进行缓存
-
-### 数据源故障转移
-
-```mermaid
-flowchart TD
-Start([开始获取数据]) --> TryEM["尝试东方财富数据源"]
-TryEM --> EMSuccess{"获取成功?"}
-EMSuccess --> |是| ReturnEM["返回东方财富数据"]
-EMSuccess --> |否| TrySina["尝试新浪数据源"]
-TrySina --> SinaSuccess{"获取成功?"}
-SinaSuccess --> |是| ReturnSina["返回新浪数据"]
-SinaSuccess --> |否| ReturnError["返回错误"]
-ReturnEM --> End([结束])
-ReturnSina --> End
-ReturnError --> End
-```
-
-**图表来源**
-- [backend/app/services/collector/manager.py:21-32](file://backend/app/services/collector/manager.py#L21-L32)
-
-### 并发处理
-
-- **异步数据库操作**: 使用SQLAlchemy 2.0的异步特性
-- **并发数据采集**: 支持多个数据源同时工作
-- **WebSocket连接池**: 管理大量并发连接
-
-## 故障排除指南
-
-### 常见错误码
-
-| 错误码 | 描述 | 可能原因 | 解决方案 |
-|--------|------|----------|----------|
-| 0 | 成功 | 正常响应 | 无需处理 |
-| 1001 | 已在自选股中 | 重复添加 | 检查是否已存在 |
-| 1002 | 股票代码不存在或数据源暂不可用 | 数据源问题 | 检查股票代码和网络连接 |
-| 1003 | 数据源暂不可用 | 数据源故障 | 稍后重试或检查备用数据源 |
-
-### WebSocket连接问题
-
-**连接失败排查**
-1. 检查WebSocket服务器是否正常运行
-2. 验证URL路径是否正确
-3. 确认CORS配置允许跨域连接
-
-**断线重连策略**
-```mermaid
-sequenceDiagram
-participant Client as 客户端
-participant Server as 服务器
-participant Timer as 重连定时器
-Client->>Server : 建立连接
-Server-->>Client : 连接成功
-Client->>Timer : 启动心跳定时器
-Timer->>Server : 发送ping
-Server-->>Client : 返回pong
-Note over Client,Server : 如果连接断开
-Client->>Client : 触发重连机制
-Client->>Server : 重新建立连接
-Client->>Server : 重新订阅
-```
-
-**图表来源**
-- [backend/app/api/websocket.py:40-65](file://backend/app/api/websocket.py#L40-L65)
-
-### API调用示例
-
-**健康检查**
-```bash
-curl http://localhost:8000/api/v1/health
-```
-
-**获取实时行情**
-```bash
-curl "http://localhost:8000/api/v1/quote/realtime?symbols=000001,600036"
-```
-
-**获取K线数据**
-```bash
-curl "http://localhost:0000/api/v1/quote/kline?symbol=000001&period=d&limit=60"
-```
-
-**添加自选股**
-```bash
-curl -X POST "http://localhost:8000/api/v1/watchlist" \
-  -H "Content-Type: application/json" \
-  -d '{"symbol":"000001","market":"sz"}'
-```
-
-**章节来源**
-- [backend/app/main.py:46-48](file://backend/app/main.py#L46-L48)
-- [backend/app/api/v1/quote.py:8-16](file://backend/app/api/v1/quote.py#L8-L16)
-- [backend/app/api/v1/watchlist.py:29-51](file://backend/app/api/v1/watchlist.py#L29-L51)
+章节来源
+- [backend/app/api/v1/quote.py:31-33](file://backend/app/api/v1/quote.py#L31-L33)
+- [backend/app/api/v1/quote.py:45-47](file://backend/app/api/v1/quote.py#L45-L47)
+- [backend/app/api/v1/watchlist.py:38-40](file://backend/app/api/v1/watchlist.py#L38-L40)
+- [backend/app/services/collector/manager.py:29-33](file://backend/app/services/collector/manager.py#L29-L33)
 
 ## 结论
+本文档系统梳理了 Stock-View 的 REST API 与 WebSocket 实时推送接口，明确了端点、参数、响应格式、错误码与数据验证规则，并提供了架构图与流程图帮助理解。建议在生产环境中结合配置项与缓存策略优化性能，并通过日志与监控持续改进稳定性。
 
-Stock-View项目提供了一个完整且功能丰富的A股行情数据服务平台。通过清晰的API设计、完善的错误处理机制和高效的性能优化策略，该系统能够满足现代股票分析应用的各种需求。
+## 附录
 
-主要特点包括：
-- **完整的行情数据服务**: 支持实时报价、K线、分时、盘口等多种数据类型
-- **灵活的自选股管理**: 提供完整的增删改查和排序功能
-- **可扩展的AI分析**: 插件化的AI分析架构，便于后续扩展
-- **高性能的实时推送**: 基于WebSocket的实时数据推送
-- **健壮的错误处理**: 完善的错误码体系和故障转移机制
+### 统一响应结构
+- 字段
+  - code：整数，0 表示成功，非 0 为错误码
+  - message：字符串，默认“success”
+  - data：对象或数组，具体接口定义详见各模块
 
-该API文档为开发者提供了详细的接口规范和技术实现指导，有助于快速集成和扩展系统功能。
+章节来源
+- [backend/app/schemas/schemas.py:6-10](file://backend/app/schemas/schemas.py#L6-L10)
+
+### SDK 使用指南（前端）
+- Axios 封装
+  - 基础路径：/api/v1
+  - 超时：15 秒
+- 接口封装
+  - 行情：getRealtime、getList、getKline、getTimeline、getOrderbook
+  - 股票：search
+  - 自选股：getList、add、remove、sort
+  - AI：analyze、getModelInfo
+- 使用建议
+  - 在组件内通过封装函数发起请求
+  - 对错误码进行统一处理（如弹窗提示或重试）
+
+章节来源
+- [frontend/src/api/index.ts:3-33](file://frontend/src/api/index.ts#L3-L33)
+
+### 客户端集成最佳实践
+- 认证机制
+  - 当前未实现鉴权中间件，建议在网关或应用层增加 JWT 或 API Key 鉴权
+- 错误处理
+  - 对 code 非 0 的响应进行统一拦截与提示
+  - 对网络异常与超时进行重试与降级
+- 实时推送
+  - 建立连接后立即发送 subscribe 消息
+  - 对 ping/pong 保持心跳，断线重连
+  - 按 symbol 与 channel 粒度订阅，避免广播风暴
+
+章节来源
+- [backend/app/main.py:29-36](file://backend/app/main.py#L29-L36)
+- [backend/app/api/websocket.py:39-65](file://backend/app/api/websocket.py#L39-L65)
+
+### 请求/响应示例（路径指引）
+- 行情实时
+  - 请求：GET /api/v1/quote/realtime?symbols=000001,sz000002
+  - 响应：参见 [响应结构:6-10](file://backend/app/schemas/schemas.py#L6-L10)
+- 行情列表
+  - 请求：GET /api/v1/quote/list?page=1&page_size=20&sort_by=change_pct&sort_order=desc&market=all
+  - 响应：参见 [QuoteListResponse:30-32](file://backend/app/schemas/schemas.py#L30-L32)
+- K线
+  - 请求：GET /api/v1/quote/kline?symbol=000001&period=d&fq_type=front&limit=120
+  - 响应：参见 [KlineResponse:45-47](file://backend/app/schemas/schemas.py#L45-L47)
+- 分时
+  - 请求：GET /api/v1/quote/timeline?symbol=000001
+  - 响应：参见 [TimelineResponse:56-58](file://backend/app/schemas/schemas.py#L56-L58)
+- 盘口
+  - 请求：GET /api/v1/quote/orderbook?symbol=000001
+  - 响应：参见 [OrderBookResponse:66-68](file://backend/app/schemas/schemas.py#L66-L68)
+- 股票搜索
+  - 请求：GET /api/v1/stock/search?keyword=贵州茅台&limit=10
+  - 响应：参见 [StockSearchItem:71-76](file://backend/app/schemas/schemas.py#L71-L76)
+- 自选股
+  - 添加：POST /api/v1/watchlist（Body：{ symbol, market }）
+  - 删除：DELETE /api/v1/watchlist/{symbol}
+  - 排序：PUT /api/v1/watchlist/sort（Body：{ items: [{ symbol, sort_order }] }）
+- AI 分析
+  - 请求：POST /api/v1/ai/analyze?symbol=000001&analysis_type=comprehensive&period_days=30
+  - 响应：参见 [AIAnalysisResponse:102-103](file://backend/app/schemas/schemas.py#L102-L103)
+- WebSocket
+  - 订阅：{ action: "subscribe", symbols: ["000001"], channels: ["quote"] }
+  - 广播：{ type: "quote", symbol: "000001", data: {...} }
+
+章节来源
+- [backend/app/api/v1/quote.py:7-65](file://backend/app/api/v1/quote.py#L7-L65)
+- [backend/app/api/v1/stock.py:10-37](file://backend/app/api/v1/stock.py#L10-L37)
+- [backend/app/api/v1/watchlist.py:13-77](file://backend/app/api/v1/watchlist.py#L13-L77)
+- [backend/app/api/v1/ai.py:10-29](file://backend/app/api/v1/ai.py#L10-L29)
+- [backend/app/api/websocket.py:39-79](file://backend/app/api/websocket.py#L39-L79)
+- [backend/app/schemas/schemas.py:12-103](file://backend/app/schemas/schemas.py#L12-L103)

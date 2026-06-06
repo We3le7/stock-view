@@ -3,13 +3,19 @@
 <cite>
 **本文引用的文件**
 - [frontend/src/api/index.ts](file://frontend/src/api/index.ts)
+- [frontend/src/stores/quote.ts](file://frontend/src/stores/quote.ts)
+- [frontend/src/stores/watchlist.ts](file://frontend/src/stores/watchlist.ts)
+- [frontend/src/router/index.ts](file://frontend/src/router/index.ts)
+- [frontend/src/main.ts](file://frontend/src/main.ts)
 - [backend/app/api/v1/quote.py](file://backend/app/api/v1/quote.py)
 - [backend/app/api/v1/stock.py](file://backend/app/api/v1/stock.py)
 - [backend/app/api/v1/watchlist.py](file://backend/app/api/v1/watchlist.py)
 - [backend/app/api/v1/ai.py](file://backend/app/api/v1/ai.py)
-- [backend/app/api/websocket.py](file://backend/app/api/websocket.py)
-- [Stock-View 软件开发文档/开发文档.md](file://Stock-View 软件开发文档/开发文档.md)
-- [README.md](file://README.md)
+- [backend/app/core/config.py](file://backend/app/core/config.py)
+- [backend/app/core/security.py](file://backend/app/core/security.py)
+- [backend/app/services/collector/manager.py](file://backend/app/services/collector/manager.py)
+- [backend/app/models/models.py](file://backend/app/models/models.py)
+- [backend/app/schemas/schemas.py](file://backend/app/schemas/schemas.py)
 </cite>
 
 ## 目录
@@ -19,263 +25,446 @@
 4. [架构总览](#架构总览)
 5. [详细组件分析](#详细组件分析)
 6. [依赖分析](#依赖分析)
-7. [性能考虑](#性能考虑)
+7. [性能考量](#性能考量)
 8. [故障排查指南](#故障排查指南)
 9. [结论](#结论)
 10. [附录](#附录)
 
 ## 简介
-本文件面向前端与后端开发者，系统性梳理该仓库中“API客户端”的设计与实现，重点覆盖以下方面：
-- HTTP请求封装与调用方式：GET、POST、PUT、DELETE等请求类型与参数传递
-- 请求/响应拦截器与错误处理机制
-- 数据转换与验证：统一响应格式、类型检查、错误信息处理
-- 客户端配置与扩展：基础URL、超时、重试等
-- 性能优化：并发控制、缓存策略、请求去重等最佳实践
-- 与后端REST接口及WebSocket推送的对接说明
+本文件面向Stock-View前端的API客户端，系统性梳理RESTful封装与调用模式，解析请求/响应拦截器、错误处理机制与重试策略的设计现状；详解各API接口（行情、股票、自选股、AI分析）的调用方式；说明API客户端与状态管理（Pinia）的集成、数据缓存策略与并发控制；给出参数校验、错误处理、加载状态管理与数据格式转换的最佳实践；并覆盖API安全、CORS、HTTPS与API版本管理的实现方案，以及测试与Mock策略。
 
 ## 项目结构
-前端通过Axios创建统一的API实例，并按模块导出各业务接口；后端提供REST API v1版本的接口定义与文档。
+前端采用Vue + Pinia + Axios组织，后端采用FastAPI + SQLAlchemy + 异步任务栈。API客户端位于frontend/src/api/index.ts，通过统一的Axios实例导出各模块API；状态管理位于frontend/src/stores目录；后端路由在backend/app/api/v1下按功能划分模块。
 
 ```mermaid
 graph TB
-FE["前端应用<br/>Axios 客户端"] --> APIIDX["API 客户端封装<br/>frontend/src/api/index.ts"]
-APIIDX --> QUOTE["行情模块接口<br/>quoteApi"]
-APIIDX --> STOCK["股票搜索接口<br/>stockApi"]
-APIIDX --> WATCHLIST["自选股接口<br/>watchlistApi"]
-APIIDX --> AI["AI分析接口<br/>aiApi"]
-BE["后端服务<br/>FastAPI 应用"] --> V1["API v1 路由"]
-V1 --> QPY["quote.py"]
-V1 --> SPY["stock.py"]
-V1 --> WLPY["watchlist.py"]
-V1 --> AIPY["ai.py"]
-WS["WebSocket 推送<br/>websocket.py"] -.-> FE
+subgraph "前端"
+FE_API["API 客户端<br/>frontend/src/api/index.ts"]
+FE_STORE_Q["行情状态<br/>frontend/src/stores/quote.ts"]
+FE_STORE_W["自选股状态<br/>frontend/src/stores/watchlist.ts"]
+FE_ROUTER["路由<br/>frontend/src/router/index.ts"]
+FE_MAIN["应用入口<br/>frontend/src/main.ts"]
+end
+subgraph "后端"
+BE_QUOTE["行情路由<br/>backend/app/api/v1/quote.py"]
+BE_STOCK["股票路由<br/>backend/app/api/v1/stock.py"]
+BE_WATCHLIST["自选股路由<br/>backend/app/api/v1/watchlist.py"]
+BE_AI["AI路由<br/>backend/app/api/v1/ai.py"]
+BE_CFG["配置<br/>backend/app/core/config.py"]
+BE_SEC["安全工具<br/>backend/app/core/security.py"]
+BE_COL["采集管理器<br/>backend/app/services/collector/manager.py"]
+BE_DB["模型定义<br/>backend/app/models/models.py"]
+BE_SCHEMA["Pydantic模型<br/>backend/app/schemas/schemas.py"]
+end
+FE_API --> FE_STORE_Q
+FE_API --> FE_STORE_W
+FE_ROUTER --> FE_MAIN
+FE_STORE_Q --> FE_API
+FE_STORE_W --> FE_API
+FE_API --> BE_QUOTE
+FE_API --> BE_STOCK
+FE_API --> BE_WATCHLIST
+FE_API --> BE_AI
+BE_QUOTE --> BE_COL
+BE_STOCK --> BE_SCHEMA
+BE_WATCHLIST --> BE_DB
+BE_AI --> BE_CFG
+BE_AI --> BE_SCHEMA
 ```
 
-图表来源
+**图表来源**
 - [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
-- [backend/app/api/v1/quote.py:1-200](file://backend/app/api/v1/quote.py)
-- [backend/app/api/v1/stock.py:1-200](file://backend/app/api/v1/stock.py)
-- [backend/app/api/v1/watchlist.py:1-200](file://backend/app/api/v1/watchlist.py)
-- [backend/app/api/v1/ai.py:1-200](file://backend/app/api/v1/ai.py)
-- [backend/app/api/websocket.py:1-200](file://backend/app/api/websocket.py)
+- [frontend/src/stores/quote.ts:1-43](file://frontend/src/stores/quote.ts#L1-L43)
+- [frontend/src/stores/watchlist.ts:1-36](file://frontend/src/stores/watchlist.ts#L1-L36)
+- [frontend/src/router/index.ts:1-14](file://frontend/src/router/index.ts#L1-L14)
+- [frontend/src/main.ts:1-12](file://frontend/src/main.ts#L1-L12)
+- [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
+- [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
+- [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
+- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
+- [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
+- [backend/app/core/security.py:1-30](file://backend/app/core/security.py#L1-L30)
+- [backend/app/services/collector/manager.py:1-94](file://backend/app/services/collector/manager.py#L1-L94)
+- [backend/app/models/models.py:1-74](file://backend/app/models/models.py#L1-L74)
+- [backend/app/schemas/schemas.py:1-103](file://backend/app/schemas/schemas.py#L1-L103)
 
-章节来源
+**章节来源**
 - [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
-- [backend/app/api/v1/quote.py:1-200](file://backend/app/api/v1/quote.py)
-- [backend/app/api/v1/stock.py:1-200](file://backend/app/api/v1/stock.py)
-- [backend/app/api/v1/watchlist.py:1-200](file://backend/app/api/v1/watchlist.py)
-- [backend/app/api/v1/ai.py:1-200](file://backend/app/api/v1/ai.py)
-- [backend/app/api/websocket.py:1-200](file://backend/app/api/websocket.py)
-- [README.md:76-91](file://README.md#L76-L91)
+- [frontend/src/stores/quote.ts:1-43](file://frontend/src/stores/quote.ts#L1-L43)
+- [frontend/src/stores/watchlist.ts:1-36](file://frontend/src/stores/watchlist.ts#L1-L36)
+- [frontend/src/router/index.ts:1-14](file://frontend/src/router/index.ts#L1-L14)
+- [frontend/src/main.ts:1-12](file://frontend/src/main.ts#L1-L12)
 
 ## 核心组件
-- Axios 客户端实例：集中配置基础URL与超时时间，便于后续扩展拦截器与全局行为
-- 模块化接口导出：按业务域拆分，便于维护与测试
-- 后端路由与视图函数：提供REST接口，统一响应结构，支持参数校验与错误处理
+- API客户端封装
+  - 基于Axios创建统一实例，设置baseURL与超时，集中暴露quoteApi、stockApi、watchlistApi、aiApi等模块化接口。
+  - 接口命名与参数传递遵循后端路由约定，便于前后端协作与契约稳定。
+- 状态管理集成
+  - 使用Pinia Store管理加载态、列表与当前项数据，异步调用API后更新本地状态，保证UI与数据一致。
+- 后端服务
+  - FastAPI路由按功能拆分，统一返回结构体；数据采集通过CollectorManager实现多数据源优先级与故障转移。
+  - 配置中心集中管理AI适配器、缓存TTL、限流、JWT等关键参数。
 
-章节来源
+**章节来源**
 - [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
-- [backend/app/api/v1/quote.py:1-200](file://backend/app/api/v1/quote.py)
-- [backend/app/api/v1/stock.py:1-200](file://backend/app/api/v1/stock.py)
-- [backend/app/api/v1/watchlist.py:1-200](file://backend/app/api/v1/watchlist.py)
-- [backend/app/api/v1/ai.py:1-200](file://backend/app/api/v1/ai.py)
+- [frontend/src/stores/quote.ts:1-43](file://frontend/src/stores/quote.ts#L1-L43)
+- [frontend/src/stores/watchlist.ts:1-36](file://frontend/src/stores/watchlist.ts#L1-L36)
+- [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
+- [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
+- [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
+- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
+- [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
 
 ## 架构总览
-前端Axios客户端负责发起HTTP请求，后端FastAPI路由接收请求并调用业务逻辑，最终返回统一格式的JSON响应。WebSocket用于实时行情推送。
+前端API客户端通过Axios发起HTTP请求，后端FastAPI路由接收请求，经由业务层（如采集管理器）访问数据源，最终返回统一结构体。Pinia Store负责状态持久与UI渲染，路由驱动页面跳转。
 
 ```mermaid
 sequenceDiagram
-participant C as "前端应用"
-participant AX as "Axios 客户端"
-participant API as "后端路由"
-participant SVC as "业务视图函数"
-C->>AX : 发起请求(方法/路径/参数)
-AX->>API : HTTP 请求
-API->>SVC : 调用视图函数(参数校验/业务处理)
-SVC-->>API : 统一响应对象
-API-->>AX : JSON 响应
-AX-->>C : Promise 解析后的数据
+participant View as "页面组件"
+participant Store as "Pinia Store"
+participant API as "API 客户端"
+participant Router as "FastAPI 路由"
+participant Manager as "采集管理器"
+participant DB as "数据库/模型"
+View->>Store : 触发动作(如获取列表)
+Store->>API : 调用对应API函数
+API->>Router : 发起HTTP请求
+Router->>Manager : 调用采集/查询逻辑
+Manager-->>Router : 返回数据或None
+Router-->>API : 统一结构体(code/message/data)
+API-->>Store : 返回响应数据
+Store->>Store : 更新loading/列表/当前项
+Store-->>View : 渲染UI
 ```
 
-图表来源
-- [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
-- [backend/app/api/v1/quote.py:1-200](file://backend/app/api/v1/quote.py)
-- [backend/app/api/v1/stock.py:1-200](file://backend/app/api/v1/stock.py)
-- [backend/app/api/v1/watchlist.py:1-200](file://backend/app/api/v1/watchlist.py)
-- [backend/app/api/v1/ai.py:1-200](file://backend/app/api/v1/ai.py)
+**图表来源**
+- [frontend/src/stores/quote.ts:11-30](file://frontend/src/stores/quote.ts#L11-L30)
+- [frontend/src/api/index.ts:8-31](file://frontend/src/api/index.ts#L8-L31)
+- [backend/app/api/v1/quote.py:19-33](file://backend/app/api/v1/quote.py#L19-L33)
+- [backend/app/services/collector/manager.py:35-47](file://backend/app/services/collector/manager.py#L35-L47)
 
 ## 详细组件分析
 
-### 前端API客户端封装
-- 客户端实例
-  - 基础URL：/api/v1
-  - 超时：15000ms
-  - 可扩展点：请求/响应拦截器、错误处理、重试策略
-- 接口导出
-  - 行情模块：实时、列表、K线、分时、盘口
-  - 股票模块：搜索
-  - 自选股模块：列表、新增、删除、排序
-  - AI模块：分析、模型信息
+### API客户端封装与调用模式
+- 统一实例与模块化导出
+  - 在API客户端中创建Axios实例，设置baseURL与超时，避免重复配置。
+  - 将不同业务域的接口按模块导出，便于按需引入与测试。
+- 请求与响应处理现状
+  - 当前未见全局请求/响应拦截器与错误处理钩子，建议在Axios实例上增加拦截器以统一处理认证、错误与重试。
+- 并发与重试
+  - 当前未实现并发控制与自动重试，建议在拦截器或调用侧加入队列与指数退避重试策略。
 
 ```mermaid
 flowchart TD
-Start(["调用API接口"]) --> BuildURL["拼接路径与查询参数"]
-BuildURL --> SendReq["Axios 发起HTTP请求"]
-SendReq --> Resp{"响应状态"}
-Resp --> |成功| Parse["解析响应数据"]
-Resp --> |失败| HandleErr["错误处理(拦截器/异常分支)"]
-Parse --> Done(["返回Promise结果"])
-HandleErr --> Done
+Start(["发起API调用"]) --> BuildReq["构建请求参数"]
+BuildReq --> Send["发送HTTP请求"]
+Send --> Resp{"收到响应?"}
+Resp --> |是| Parse["解析响应结构体"]
+Resp --> |否| Retry{"是否允许重试?"}
+Retry --> |是| Backoff["指数退避等待"] --> Send
+Retry --> |否| HandleErr["统一错误处理"]
+Parse --> UpdateStore["更新Pinia状态"]
+HandleErr --> UpdateStore
+UpdateStore --> End(["完成"])
 ```
 
-图表来源
-- [frontend/src/api/index.ts:8-31](file://frontend/src/api/index.ts#L8-L31)
+**图表来源**
+- [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
+- [frontend/src/stores/quote.ts:11-22](file://frontend/src/stores/quote.ts#L11-L22)
 
-章节来源
+**章节来源**
 - [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
 
-### 请求类型与参数处理
-- GET：适用于查询类接口，参数以查询字符串形式传递
-  - 示例：行情列表、K线、分时、盘口、自选股列表、AI模型信息
-- POST：适用于创建类接口，参数以请求体传递
-  - 示例：添加自选股、请求AI分析
-- PUT：适用于更新类接口，参数以请求体传递
-  - 示例：调整自选股排序
-- DELETE：适用于删除类接口，通常无请求体或携带路径参数
-  - 示例：删除自选股
+### 行情数据接口
+- 接口清单
+  - 实时行情、行情列表、K线、分时、盘口。
+- 参数与约束
+  - 列表接口支持市场筛选、排序字段/方向、分页大小限制；K线接口支持周期、复权类型与数量限制；实时接口限制符号数量上限。
+- 前端调用与状态更新
+  - Store在fetchList中设置loading，成功后更新列表与总数；fetchRealtime返回数据项数组，供组件渲染。
 
-章节来源
-- [frontend/src/api/index.ts:8-31](file://frontend/src/api/index.ts#L8-L31)
+```mermaid
+sequenceDiagram
+participant Page as "行情页面"
+participant Store as "useQuoteStore"
+participant API as "quoteApi"
+participant BE as "quote路由"
+Page->>Store : fetchList(page,pageSize,...)
+Store->>API : getList(params)
+API->>BE : GET /quote/list
+BE-->>API : {code,message,data}
+API-->>Store : data
+Store->>Store : 设置loading=false并更新列表/总数
+Store-->>Page : 渲染列表
+```
 
-### 错误处理与统一响应
-- 后端统一响应结构
-  - 字段：code、message、data
-  - 成功：code为0，data包含业务数据
-  - 失败：code非0，message描述错误信息
-- 前端建议
-  - 在响应拦截器中解析统一结构，抛出业务异常或转换为可识别错误
-  - 对网络异常与超时进行分类处理，必要时触发重试
+**图表来源**
+- [frontend/src/stores/quote.ts:11-22](file://frontend/src/stores/quote.ts#L11-L22)
+- [frontend/src/api/index.ts:8-14](file://frontend/src/api/index.ts#L8-L14)
+- [backend/app/api/v1/quote.py:19-33](file://backend/app/api/v1/quote.py#L19-L33)
 
-章节来源
-- [Stock-View 软件开发文档/开发文档.md:711-1641](file://Stock-View 软件开发文档/开发文档.md#L711-L1641)
+**章节来源**
+- [frontend/src/stores/quote.ts:1-43](file://frontend/src/stores/quote.ts#L1-L43)
+- [frontend/src/api/index.ts:8-14](file://frontend/src/api/index.ts#L8-L14)
+- [backend/app/api/v1/quote.py:1-65](file://backend/app/api/v1/quote.py#L1-L65)
 
-### 数据转换与验证
-- 参数校验
-  - 后端对输入参数进行类型与范围校验，确保接口健壮性
-- 响应格式化
-  - 统一返回结构，前端可据此进行UI渲染与状态管理
-- 类型检查
-  - 建议在前端对关键字段进行类型检查与默认值处理，避免运行时错误
+### 股票搜索接口
+- 接口说明
+  - 支持根据关键词搜索A股股票，返回代码、名称、市场与拼音首字母。
+- 数据源与限制
+  - 使用东方财富建议接口，限制返回数量与仅A股过滤。
+- 前端调用
+  - 通过stockApi.search发起请求，Store可直接使用返回结果更新搜索列表。
 
-章节来源
-- [Stock-View 软件开发文档/开发文档.md:711-1641](file://Stock-View 软件开发文档/开发文档.md#L711-L1641)
+```mermaid
+sequenceDiagram
+participant Page as "搜索页面"
+participant API as "stockApi"
+participant BE as "stock路由"
+Page->>API : search(keyword,limit)
+API->>BE : GET /stock/search
+BE-->>API : {code,message,data}
+API-->>Page : 返回搜索结果
+```
 
-### 配置选项与扩展方式
-- 基础URL：/api/v1
-- 超时：15000ms
-- 扩展点
-  - 请求拦截器：注入鉴权头、签名、埋点等
-  - 响应拦截器：统一解包、错误映射、日志记录
-  - 重试机制：对幂等请求进行指数退避重试
-  - 并发控制：限制同时请求数量，避免资源争用
-  - 缓存策略：基于URL与参数的LRU缓存，命中则直接返回
-  - 请求去重：对相同请求键进行去重，等待首个请求完成后再复用结果
+**图表来源**
+- [frontend/src/api/index.ts:16-18](file://frontend/src/api/index.ts#L16-L18)
+- [backend/app/api/v1/stock.py:10-37](file://backend/app/api/v1/stock.py#L10-L37)
 
-章节来源
-- [frontend/src/api/index.ts:1-6](file://frontend/src/api/index.ts#L1-L6)
+**章节来源**
+- [frontend/src/api/index.ts:16-18](file://frontend/src/api/index.ts#L16-L18)
+- [backend/app/api/v1/stock.py:1-37](file://backend/app/api/v1/stock.py#L1-L37)
 
-### 与后端接口的对接
-- 行情接口
-  - 实时、列表、K线、分时、盘口
-- 股票搜索
-  - 支持关键词与数量限制
-- 自选股
-  - 列表、新增、删除、排序
-- AI分析
-  - 支持分析类型与周期参数
+### 自选股接口
+- 接口说明
+  - 获取列表、添加、删除、排序。
+- 数据持久化
+  - 使用SQLAlchemy模型与数据库交互，排序基于sort_order字段维护。
+- 前端调用
+  - Store在add/remove后立即刷新列表，isWatched用于UI状态判断。
 
-章节来源
-- [frontend/src/api/index.ts:8-31](file://frontend/src/api/index.ts#L8-L31)
-- [backend/app/api/v1/quote.py:1-200](file://backend/app/api/v1/quote.py)
-- [backend/app/api/v1/stock.py:1-200](file://backend/app/api/v1/stock.py)
-- [backend/app/api/v1/watchlist.py:1-200](file://backend/app/api/v1/watchlist.py)
-- [backend/app/api/v1/ai.py:1-200](file://backend/app/api/v1/ai.py)
+```mermaid
+sequenceDiagram
+participant Page as "自选页面"
+participant Store as "useWatchlistStore"
+participant API as "watchlistApi"
+participant BE as "watchlist路由"
+participant DB as "数据库"
+Page->>Store : addStock(symbol)
+Store->>API : add(symbol,market)
+API->>BE : POST /watchlist
+BE->>DB : 插入记录
+BE-->>API : {code,message}
+API-->>Store : 成功
+Store->>API : getList()
+API->>BE : GET /watchlist
+BE->>DB : 查询记录
+BE-->>API : {code,message,data}
+API-->>Store : 列表
+Store-->>Page : 渲染最新自选
+```
 
-### WebSocket推送
-- 连接地址：ws://hostname/api/v1/ws/quote?token={token}
-- 订阅消息：subscribe，包含symbols与channels
-- 服务端推送：quote与orderbook两类数据
-- 心跳：客户端每30秒发送ping，超过60秒未收到pong则断开
+**图表来源**
+- [frontend/src/stores/watchlist.ts:21-29](file://frontend/src/stores/watchlist.ts#L21-L29)
+- [frontend/src/api/index.ts:20-25](file://frontend/src/api/index.ts#L20-L25)
+- [backend/app/api/v1/watchlist.py:13-26](file://backend/app/api/v1/watchlist.py#L13-L26)
+- [backend/app/models/models.py:50-59](file://backend/app/models/models.py#L50-L59)
 
-章节来源
-- [Stock-View 软件开发文档/开发文档.md:1568-1641](file://Stock-View 软件开发文档/开发文档.md#L1568-L1641)
-- [backend/app/api/websocket.py:1-200](file://backend/app/api/websocket.py)
+**章节来源**
+- [frontend/src/stores/watchlist.ts:1-36](file://frontend/src/stores/watchlist.ts#L1-L36)
+- [frontend/src/api/index.ts:20-25](file://frontend/src/api/index.ts#L20-L25)
+- [backend/app/api/v1/watchlist.py:1-77](file://backend/app/api/v1/watchlist.py#L1-L77)
+- [backend/app/models/models.py:50-59](file://backend/app/models/models.py#L50-L59)
+
+### AI分析接口
+- 接口说明
+  - 提交分析请求与获取模型信息。
+- 配置与适配器
+  - 通过配置中心选择AI适配器，支持缓存与限流策略。
+- 前端调用
+  - aiApi.analyze与aiApi.getModelInfo分别调用后端对应路由。
+
+```mermaid
+sequenceDiagram
+participant Page as "AI分析页面"
+participant API as "aiApi"
+participant BE as "ai路由"
+participant CFG as "配置中心"
+Page->>API : analyze(symbol,type,days)
+API->>BE : POST /ai/analyze
+BE->>CFG : 读取AI_ADAPTER
+BE-->>API : {code,message,data}
+API-->>Page : 返回分析结果
+Page->>API : getModelInfo()
+API->>BE : GET /ai/model-info
+BE-->>API : {code,message,data}
+API-->>Page : 返回模型信息
+```
+
+**图表来源**
+- [frontend/src/api/index.ts:27-31](file://frontend/src/api/index.ts#L27-L31)
+- [backend/app/api/v1/ai.py:10-29](file://backend/app/api/v1/ai.py#L10-L29)
+- [backend/app/core/config.py:19-24](file://backend/app/core/config.py#L19-L24)
+
+**章节来源**
+- [frontend/src/api/index.ts:27-31](file://frontend/src/api/index.ts#L27-L31)
+- [backend/app/api/v1/ai.py:1-29](file://backend/app/api/v1/ai.py#L1-L29)
+- [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
+
+### API客户端与状态管理集成
+- 加载状态管理
+  - Store在发起请求前设置loading，在finally块中关闭，避免UI卡死。
+- 数据更新策略
+  - fetchList更新列表与总数；fetchRealtime返回实时数据；updateQuote按符号合并更新。
+- 路由与页面联动
+  - 路由定义了市场、详情、自选、搜索页面，页面组件通过Store与API协同工作。
+
+```mermaid
+flowchart TD
+A["用户触发动作"] --> B["Store设置loading=true"]
+B --> C["API发起请求"]
+C --> D{"请求成功?"}
+D --> |是| E["Store更新数据"]
+D --> |否| F["Store设置loading=false并处理错误"]
+E --> G["Store设置loading=false"]
+G --> H["UI渲染更新"]
+F --> H
+```
+
+**图表来源**
+- [frontend/src/stores/quote.ts:11-22](file://frontend/src/stores/quote.ts#L11-L22)
+- [frontend/src/stores/watchlist.ts:9-19](file://frontend/src/stores/watchlist.ts#L9-L19)
+- [frontend/src/router/index.ts:1-14](file://frontend/src/router/index.ts#L1-L14)
+- [frontend/src/main.ts:1-12](file://frontend/src/main.ts#L1-L12)
+
+**章节来源**
+- [frontend/src/stores/quote.ts:1-43](file://frontend/src/stores/quote.ts#L1-L43)
+- [frontend/src/stores/watchlist.ts:1-36](file://frontend/src/stores/watchlist.ts#L1-L36)
+- [frontend/src/router/index.ts:1-14](file://frontend/src/router/index.ts#L1-L14)
+- [frontend/src/main.ts:1-12](file://frontend/src/main.ts#L1-L12)
+
+### 错误处理机制与重试策略
+- 现状
+  - 后端路由对部分接口返回特定错误码（如数据源不可用），前端Store在调用处检查code字段。
+- 建议
+  - 在Axios拦截器中统一捕获HTTP错误与业务错误，结合指数退避进行有限重试，并提供错误提示与降级策略。
+
+**章节来源**
+- [backend/app/api/v1/quote.py:31-33](file://backend/app/api/v1/quote.py#L31-L33)
+- [backend/app/api/v1/quote.py:44-47](file://backend/app/api/v1/quote.py#L44-L47)
+- [frontend/src/stores/quote.ts:13-21](file://frontend/src/stores/quote.ts#L13-L21)
+
+### 数据缓存策略
+- 后端缓存
+  - 配置中心提供AI缓存开关与TTL、行情缓存TTL等参数，采集管理器可配合Redis实现缓存。
+- 前端缓存
+  - 建议在Store中对高频接口（如实时行情）做内存缓存与失效策略，减少重复请求。
+
+**章节来源**
+- [backend/app/core/config.py:22-30](file://backend/app/core/config.py#L22-L30)
+- [backend/app/services/collector/manager.py:12-94](file://backend/app/services/collector/manager.py#L12-L94)
+
+### 并发请求控制
+- 现状
+  - 未见显式并发控制与请求去重逻辑。
+- 建议
+  - 在拦截器或调用侧实现请求去重（基于URL与参数哈希）、并发上限与队列调度，避免风暴与资源争用。
 
 ## 依赖分析
-- 前端依赖Axios作为HTTP客户端，集中配置基础URL与超时
-- 后端依赖FastAPI，提供REST接口与WebSocket服务
-- 前后端通过统一的JSON响应结构进行数据交换
+- 前端依赖
+  - Vue生态：Vue、Pinia、Element Plus。
+  - 网络：Axios。
+- 后端依赖
+  - Web：FastAPI。
+  - 数据库：SQLAlchemy + PostgreSQL。
+  - 异步：async/await、httpx。
+  - 配置：pydantic-settings。
+  - 安全：jose、passlib。
+  - 缓存：Redis（配置中启用）。
 
 ```mermaid
 graph LR
-AX["Axios 客户端"] --> |HTTP| API["后端 REST API"]
-AX --> WS["WebSocket 推送"]
-API --> RESP["统一响应结构"]
-WS --> DATA["实时行情数据"]
+FE["前端"] --> AX["Axios"]
+FE --> PIN["Pinia"]
+FE --> VUE["Vue"]
+BE["后端"] --> FAST["FastAPI"]
+BE --> SQL["SQLAlchemy"]
+BE --> CFG["pydantic-settings"]
+BE --> SEC["jose/passlib"]
+BE --> REDIS["Redis"]
 ```
 
-图表来源
-- [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
-- [backend/app/api/v1/quote.py:1-200](file://backend/app/api/v1/quote.py)
-- [backend/app/api/v1/stock.py:1-200](file://backend/app/api/v1/stock.py)
-- [backend/app/api/v1/watchlist.py:1-200](file://backend/app/api/v1/watchlist.py)
-- [backend/app/api/v1/ai.py:1-200](file://backend/app/api/v1/ai.py)
-- [backend/app/api/websocket.py:1-200](file://backend/app/api/websocket.py)
+**图表来源**
+- [frontend/src/main.ts:1-12](file://frontend/src/main.ts#L1-L12)
+- [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
+- [backend/app/core/security.py:1-30](file://backend/app/core/security.py#L1-L30)
 
-章节来源
-- [frontend/src/api/index.ts:1-33](file://frontend/src/api/index.ts#L1-L33)
-- [backend/app/api/v1/quote.py:1-200](file://backend/app/api/v1/quote.py)
-- [backend/app/api/v1/stock.py:1-200](file://backend/app/api/v1/stock.py)
-- [backend/app/api/v1/watchlist.py:1-200](file://backend/app/api/v1/watchlist.py)
-- [backend/app/api/v1/ai.py:1-200](file://backend/app/api/v1/ai.py)
-- [backend/app/api/websocket.py:1-200](file://backend/app/api/websocket.py)
+**章节来源**
+- [frontend/src/main.ts:1-12](file://frontend/src/main.ts#L1-L12)
+- [backend/app/core/config.py:1-43](file://backend/app/core/config.py#L1-L43)
+- [backend/app/core/security.py:1-30](file://backend/app/core/security.py#L1-L30)
 
-## 性能考虑
-- 并发控制
-  - 使用信号量或队列限制同时请求数量，避免阻塞与资源争用
-- 缓存策略
-  - 对GET请求建立基于URL与参数的LRU缓存，命中即返回，降低后端压力
-- 请求去重
-  - 对相同请求键进行去重，等待首个请求完成后复用结果
-- 超时与重试
-  - 合理设置超时阈值，对幂等请求采用指数退避重试
-- WebSocket长连接
-  - 心跳保活，断线重连，批量订阅减少握手成本
+## 性能考量
+- 请求超时与并发
+  - 前端Axios已设置超时；建议增加并发上限与请求去重，避免重复请求。
+- 缓存与失效
+  - 后端配置了AI与行情缓存TTL；前端可对热点数据做本地缓存与失效策略。
+- 数据源优先级与故障转移
+  - 采集管理器按优先级轮询数据源，提升可用性与稳定性。
+
+**章节来源**
+- [frontend/src/api/index.ts:3-6](file://frontend/src/api/index.ts#L3-L6)
+- [backend/app/core/config.py:22-30](file://backend/app/core/config.py#L22-L30)
+- [backend/app/services/collector/manager.py:9-33](file://backend/app/services/collector/manager.py#L9-L33)
 
 ## 故障排查指南
-- 网络错误
-  - 检查基础URL与代理配置，确认开发服务器已启动并正确代理到后端
-  - 查看浏览器网络面板，定位4xx/5xx错误与超时
-- 统一响应错误
-  - 根据code与message判断业务错误类型，前端在拦截器中统一处理
-- 参数校验失败
-  - 对照后端参数定义，检查必填项、类型与取值范围
-- WebSocket异常
-  - 检查token有效性、订阅消息格式与心跳频率
+- 常见问题
+  - 接口返回非0 code：检查后端路由返回结构与Store解析逻辑。
+  - 数据为空：确认采集管理器是否切换到备用数据源。
+  - 路由404：核对baseURL与后端路由前缀是否匹配。
+- 建议流程
+  - 打印请求URL与参数，查看响应结构；在拦截器中统一记录错误日志；必要时降级为本地缓存或默认值。
 
-章节来源
-- [README.md:76-91](file://README.md#L76-L91)
-- [Stock-View 软件开发文档/开发文档.md:711-1641](file://Stock-View 软件开发文档/开发文档.md#L711-L1641)
+**章节来源**
+- [backend/app/api/v1/quote.py:31-33](file://backend/app/api/v1/quote.py#L31-L33)
+- [backend/app/services/collector/manager.py:21-33](file://backend/app/services/collector/manager.py#L21-L33)
+- [frontend/src/api/index.ts:3-6](file://frontend/src/api/index.ts#L3-L6)
 
 ## 结论
-该API客户端以Axios为核心，结合模块化接口导出与后端统一响应结构，提供了清晰、可扩展的前后端交互方案。通过引入请求/响应拦截器、错误处理、缓存与重试等机制，可在保证一致性的同时提升用户体验与系统稳定性。WebSocket补充了实时数据通道，进一步完善了整体架构。
+本API客户端以Axios为核心，模块化封装了行情、股票、自选股与AI分析接口，配合Pinia实现状态管理与UI渲染。后端通过FastAPI与采集管理器提供高可用的数据服务。建议在前端引入拦截器实现统一错误处理与重试、在Store中完善缓存与并发控制，并在后端持续优化数据源优先级与缓存策略，以获得更稳健的用户体验。
 
 ## 附录
-- 开发环境启动与代理说明
-  - 前端开发服务器默认运行在 http://localhost:5173，Vite 将自动代理 /api/v1 到后端 8000 端口
-- 接口文档与示例
-  - 参考“软件开发文档”中的REST API与WebSocket部分，了解请求/响应格式与参数定义
 
-章节来源
-- [README.md:76-91](file://README.md#L76-L91)
-- [Stock-View 软件开发文档/开发文档.md:711-1641](file://Stock-View 软件开发文档/开发文档.md#L711-L1641)
+### 最佳实践清单
+- 参数验证
+  - 对必填参数进行类型与范围校验，后端路由Query参数已提供描述与约束。
+- 错误处理
+  - 前端Store检查code字段；拦截器统一捕获HTTP与业务错误，提供用户提示。
+- 加载状态管理
+  - 在请求开始设置loading，在finally中关闭，避免UI冻结。
+- 数据格式转换
+  - 使用后端Pydantic模型作为契约，前端Store按结构体映射字段。
+- 安全考虑
+  - JWT签名与解码在后端完成；前端避免存储敏感信息。
+- CORS与HTTPS
+  - 后端未显式配置CORS中间件，建议在部署时开启并限定来源；生产环境使用HTTPS。
+- API版本管理
+  - 后端路由已使用v1前缀，建议保持向后兼容或提供迁移指引。
+
+**章节来源**
+- [backend/app/api/v1/quote.py:19-33](file://backend/app/api/v1/quote.py#L19-L33)
+- [backend/app/schemas/schemas.py:13-103](file://backend/app/schemas/schemas.py#L13-L103)
+- [backend/app/core/security.py:18-29](file://backend/app/core/security.py#L18-L29)
+- [backend/app/core/config.py:8-10](file://backend/app/core/config.py#L8-L10)
+
+### 测试与Mock策略
+- 单元测试
+  - Store方法可独立测试，模拟API返回结构体，断言状态更新。
+- Mock数据
+  - 使用拦截器替换真实请求，返回预设数据，便于离线调试。
+- 网络异常
+  - 拦截器中模拟超时、断网与5xx错误，验证错误提示与重试逻辑。
+
+**章节来源**
+- [frontend/src/stores/quote.ts:11-30](file://frontend/src/stores/quote.ts#L11-L30)
+- [frontend/src/stores/watchlist.ts:9-29](file://frontend/src/stores/watchlist.ts#L9-L29)

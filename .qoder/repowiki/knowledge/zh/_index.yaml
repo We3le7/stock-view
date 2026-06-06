@@ -2,18 +2,71 @@
 schema_version: 1
 locale: zh-CN
 branch: main
-exported_at: "2026-06-05T09:55:09Z"
+exported_at: "2026-06-05T10:37:57Z"
 modules:
     "":
-        dir_name: A股实时行情与AI分析平台
-        title: A股实时行情与AI分析平台
+        dir_name: Stock-View 全栈行情与AI分析平台
+        title: Stock-View 全栈行情与AI分析平台
         scope:
             - README.md
+            - docker-compose.yml
             - Stock-View 软件开发文档/
-            - frontend/
-            - backend/
             - .env.example
         source_files: []
         children: []
         depends_on: []
         related_to: []
+    backend:
+        dir_name: 股票行情与AI分析后端服务
+        title: 股票行情与AI分析后端服务
+        scope:
+            - backend/
+        source_files: []
+        children:
+            - backend/core_infrastructure
+            - backend/data_collectors
+            - backend/api_v1
+        depends_on: []
+        related_to: []
+    backend/api_v1:
+        dir_name: 股票行情与AI分析API接口
+        title: 股票行情与AI分析API接口
+        scope:
+            - backend/app/api/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: frontend
+            - path: backend/data_collectors
+    backend/core_infrastructure:
+        dir_name: 核心基础设施与数据模型
+        title: 核心基础设施与数据模型
+        scope:
+            - backend/app/core/
+            - backend/app/models/
+            - backend/app/schemas/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    backend/data_collectors:
+        dir_name: 多源股票行情采集与故障转移
+        title: 多源股票行情采集与故障转移
+        scope:
+            - backend/app/services/collector/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: backend/api_v1
+    frontend:
+        dir_name: 股票行情前端应用
+        title: 股票行情前端应用
+        scope:
+            - frontend/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: backend/api_v1

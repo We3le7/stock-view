@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: backend/core_infrastructure
+title: 核心基础设施与数据模型
+scope:
+    - backend/app/core/
+    - backend/app/models/
+    - backend/app/schemas/
+source_files: []
+depends_on: []
+related_to: []
