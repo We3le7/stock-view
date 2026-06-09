@@ -62,7 +62,7 @@
             </template>
           </el-table-column>
 
-          <el-table-column label="涨跌幅" width="110" align="right" sortable>
+          <el-table-column label="涨跌幅" width="110" align="right">
             <template #default="{ row }">
               <span :class="['change-cell', getColorClass(row.change_pct)]">
                 {{ row.change_pct > 0 ? '+' : '' }}{{ row.change_pct }}%
@@ -138,6 +138,8 @@ const watchlistStore = useWatchlistStore()
 
 const tabs = [
   { key: 'all', label: '沪深A股' },
+  { key: 'sh', label: '沪市' },
+  { key: 'sz', label: '深市' },
   { key: 'gainers', label: '涨幅榜' },
   { key: 'losers', label: '跌幅榜' },
   { key: 'turnover', label: '换手榜' },
@@ -172,11 +174,14 @@ function formatAmount(v: number) {
   return v > 100000000 ? (v / 100000000).toFixed(2) + '亿' : v > 10000 ? (v / 10000).toFixed(0) + '万' : v.toString()
 }
 
-const sortMap: Record<string, { sortBy: string; sortOrder: string }> = {
-  all: { sortBy: 'change_pct', sortOrder: 'desc' },
-  gainers: { sortBy: 'change_pct', sortOrder: 'desc' },
-  losers: { sortBy: 'change_pct', sortOrder: 'asc' },
-  turnover: { sortBy: 'turnover', sortOrder: 'desc' },
+// 每个 tab 对应的排序参数和可选市场筛选
+const tabConfig: Record<string, { sortBy: string; sortOrder: string; market: string }> = {
+  all:     { sortBy: 'amount',    sortOrder: 'desc', market: 'all' },
+  sh:      { sortBy: 'amount',    sortOrder: 'desc', market: 'sh' },
+  sz:      { sortBy: 'amount',    sortOrder: 'desc', market: 'sz' },
+  gainers: { sortBy: 'change_pct', sortOrder: 'desc', market: 'all' },
+  losers:  { sortBy: 'change_pct', sortOrder: 'asc',  market: 'all' },
+  turnover:{ sortBy: 'turnover',   sortOrder: 'desc', market: 'all' },
 }
 
 function switchTab(key: string) {
@@ -186,8 +191,8 @@ function switchTab(key: string) {
 }
 
 function loadData() {
-  const s = sortMap[currentTab.value] || sortMap.all
-  quoteStore.fetchList(page.value, pageSize.value, s.sortBy, s.sortOrder)
+  const cfg = tabConfig[currentTab.value] || tabConfig.all
+  quoteStore.fetchList(page.value, pageSize.value, cfg.sortBy, cfg.sortOrder, cfg.market)
 }
 
 async function loadWatchlistQuotes() {

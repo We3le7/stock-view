@@ -94,7 +94,7 @@ class EastMoneyCollector(BaseCollector):
             "turnover": "f8",
         }
         fid = sort_field_map.get(sort_by, "f3")
-        po = 0 if sort_order == "desc" else 1
+        po = 1 if sort_order == "desc" else 0  # 东方财富: 1=降序, 0=升序
 
         fs_map = {
             "all": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
